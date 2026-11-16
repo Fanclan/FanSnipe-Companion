@@ -1,4 +1,18 @@
 {
-  "dashboardOrigins": [],
-  "externalOrigins": ["https://github.com", "https://fanclan.io", "https://www.twitch.tv", "https://twitch.tv", "https://www.youtube.com", "https://youtube.com", "https://youtu.be", "https://kick.com", "https://www.kick.com", "https://chaturbate.com", "https://www.chaturbate.com"]
+  "dashboardOrigins": [
+    "https://streamsnipe-portal.vercel.app"
+  ],
+  "externalOrigins": [
+    "https://github.com",
+    "https://fanclan.io",
+    "https://www.twitch.tv",
+    "https://twitch.tv",
+    "https://www.youtube.com",
+    "https://youtube.com",
+    "https://youtu.be",
+    "https://kick.com",
+    "https://www.kick.com",
+    "https://chaturbate.com",
+    "https://www.chaturbate.com"
+  ]
 }

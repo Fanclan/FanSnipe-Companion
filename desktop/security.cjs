@@ -23,4 +23,12 @@ function verifyResources(root) {
     if (actual !== expected) throw new Error(`Resource integrity failure: ${rel}`);
   }
 }
-module.exports = { isDashboardUrl, validateManifest, verifyResources };
+function parseTestEnvironment(env) {
+  const origin=env.STREAMSNIPE_TEST_FIXTURE_ORIGIN, dataDir=env.STREAMSNIPE_TEST_DATA_DIR;
+  if (!origin && !dataDir) return null;
+  if (!origin || !dataDir || !path.isAbsolute(dataDir) || !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}$/.test(origin)) throw new Error('Invalid isolated test environment');
+  const parsed = new URL(origin);
+  if (parsed.origin !== origin || Number(parsed.port) < 1 || Number(parsed.port) > 65535) throw new Error('Invalid isolated test origin');
+  return {origin,dataDir};
+}
+module.exports = { isDashboardUrl, validateManifest, verifyResources, parseTestEnvironment };

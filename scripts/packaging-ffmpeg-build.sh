@@ -24,7 +24,7 @@ case "$TARGET" in
   win32-x64) TLS=(--enable-schannel); EXTRA=(--extra-ldflags=-static);;
   *) echo "Unsupported FFmpeg target: $TARGET" >&2; exit 1;;
 esac
-./configure --disable-autodetect --disable-x86asm --disable-doc --disable-debug --disable-ffplay --disable-shared --enable-static "${TLS[@]}" "${EXTRA[@]}"
+./configure --disable-autodetect --disable-x86asm --disable-doc --disable-debug --disable-ffplay --disable-shared --enable-static "${TLS[@]}" ${EXTRA[@]+"${EXTRA[@]}"}
 make -j "${FFMPEG_BUILD_JOBS:-4}" ffmpeg ffprobe
 EXT=''; [ "$TARGET" != win32-x64 ] || EXT=.exe
 cp "ffmpeg$EXT" "ffprobe$EXT" "$OUT/"

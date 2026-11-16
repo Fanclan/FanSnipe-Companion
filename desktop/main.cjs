@@ -1,6 +1,8 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, shell, utilityProcess } = require('electron');
 const path = require('node:path');
-const { isDashboardUrl, verifyResources } = require('./security.cjs');
+const { isDashboardUrl, verifyResources, parseTestEnvironment } = require('./security.cjs');
+const testEnvironment = parseTestEnvironment(process.env);
+if (testEnvironment) app.setPath('userData', testEnvironment.dataDir);
 const config = require('./config.json');
 function openAllowedExternal(target) { try { const u = new URL(target); if (u.protocol === 'https:' && !u.username && !u.password && [...config.externalOrigins, ...config.dashboardOrigins].includes(u.origin)) void shell.openExternal(u.href); } catch {} }
 const PORT = 47821;
@@ -78,7 +80,7 @@ app.whenReady().then(() => {
   engine.on('exit', () => { engineReady = false; if (!quitting) dialog.showErrorBox('StreamSnipe engine', 'The recording engine stopped unexpectedly. Restart StreamSnipe.'); });
   tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'icon.png')));
   tray.setToolTip('StreamSnipe'); tray.setContextMenu(buildMenu()); tray.on('click', showWindow);
-  engine.postMessage({type:'start', resources, dataDir:app.getPath('userData'), recordingsPath:process.env.STREAMSNIPE_RECORDINGS_PATH || path.join(app.getPath('videos'), 'StreamSnipe')});
+  engine.postMessage({type:'start', resources, fixtureOrigin:testEnvironment?.origin, dataDir:app.getPath('userData'), recordingsPath:testEnvironment ? path.join(testEnvironment.dataDir, 'recordings') : (process.env.STREAMSNIPE_RECORDINGS_PATH || path.join(app.getPath('videos'), 'StreamSnipe'))});
 });
 app.on('before-quit', event => { if (!quitting && engineReady) { event.preventDefault(); quitting = true; clearInterval(timer); engine.postMessage({type:'stop'}); } });
 app.on('window-all-closed', () => {});
