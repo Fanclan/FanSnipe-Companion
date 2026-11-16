@@ -1,6 +1,6 @@
 StreamSnipe Windows synthetic recording QA
 
-This private test bundle contains an unpacked candidate application and a synthetic
+This test bundle contains an unpacked candidate application and a synthetic
 three-stream test. It does not install StreamSnipe or use your existing recordings.
 Windows 11 x64 is required; no separate Node, FFmpeg, or .NET installation is needed.
 

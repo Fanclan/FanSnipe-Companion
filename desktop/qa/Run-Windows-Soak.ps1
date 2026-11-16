@@ -70,6 +70,8 @@ try {
   Write-Host "Running synthetic $seconds-second test. Reports and logs: $runDir"
   $start = [DateTime]::UtcNow
   $process = Start-Process -FilePath $runtime -ArgumentList @('"' + $soak + '"') -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+  # Retain the native handle so Windows PowerShell 5.1 reports the exit code.
+  $null = $process.Handle
   $process.WaitForExit()
   $elapsed = ([DateTime]::UtcNow - $start).TotalSeconds
   $report['exitCode'] = $process.ExitCode; $report['elapsedSeconds'] = [Math]::Round($elapsed, 1)

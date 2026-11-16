@@ -151,7 +151,8 @@ jobs:
           Copy-Item 'desktop/qa/README.txt' $qa
           $isolated = Join-Path $env:RUNNER_TEMP 'streamsnipe-clean-qa'
           Copy-Item -Recurse $qa $isolated
-          & (Join-Path $isolated 'Run-Windows-Soak.ps1') -Smoke -OutputRoot (Join-Path $env:RUNNER_TEMP 'streamsnipe-qa-smoke')
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $isolated 'Run-Windows-Soak.ps1') -Smoke -OutputRoot (Join-Path $env:RUNNER_TEMP 'streamsnipe-qa-smoke')
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell QA smoke failed with exit code $LASTEXITCODE" }
           Compress-Archive -Path (Join-Path $qa '*') -DestinationPath 'artifacts/StreamSnipe-Windows-QA.zip'
           $hash = (Get-FileHash -Algorithm SHA256 'artifacts/StreamSnipe-Windows-QA.zip').Hash.ToLowerInvariant()
           "$hash  StreamSnipe-Windows-QA.zip" | Set-Content -Encoding ascii 'artifacts/StreamSnipe-Windows-QA.zip.sha256'
