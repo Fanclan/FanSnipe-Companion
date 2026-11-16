@@ -242,15 +242,16 @@ jobs:
           merge-multiple: true
       - name: Create versioned checksums and download metadata
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('candidate-{0}', github.sha) }}
         run: |
           python3 - <<'PYCODE'
-          import hashlib, json, os, pathlib
+          import hashlib, json, os, pathlib, re
           root = pathlib.Path('release-files')
           files = sorted(p for p in root.iterdir() if p.is_file())
           if not files: raise SystemExit('No release artifacts')
           records = [{'name':p.name, 'bytes':p.stat().st_size, 'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
           version = os.environ['VERSION']
+          if not re.fullmatch(r'[A-Za-z0-9._-]+', version): raise SystemExit('Unsafe release version')
           (root / f'SHA256SUMS-{version}.txt').write_text(''.join(f"{r['sha256']}  {r['name']}\n" for r in records))
           (root / f'download-manifest-{version}.json').write_text(json.dumps({'version':version,'protocolVersion':1,'status':'candidate','files':records},indent=2)+'\n')
           PYCODE
@@ -259,7 +260,7 @@ jobs:
           subject-path: release-files/*
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: release-metadata-${{ github.ref_name }}
+          name: release-metadata-${{ github.sha }}
           path: |
             release-files/SHA256SUMS-*.txt
             release-files/download-manifest-*.json
