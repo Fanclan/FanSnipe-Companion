@@ -1,0 +1,230 @@
+name: Build release candidates
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+jobs:
+  candidate:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    environment: ${{ (github.event_name == 'workflow_dispatch' || contains(github.ref_name, '-beta')) && 'beta' || 'production' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+            flags: --mac --arm64
+          - os: macos-15-intel
+            target: darwin-x64
+            flags: --mac --x64
+          - os: windows-2025
+            target: win32-x64
+            flags: --win --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm ci
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - name: Fetch pinned dashboard archive
+        shell: bash
+        env:
+          DASHBOARD_URL: ${{ vars.DASHBOARD_ARTIFACT_URL }}
+        run: |
+          test -n "$DASHBOARD_URL"
+          curl --fail --location --proto '=https' "$DASHBOARD_URL" -o dashboard.tar.gz
+          node -e "const fs=require('fs'),c=require('crypto'),lock=require('./scripts/packaging-dashboard.json');if(c.createHash('sha256').update(fs.readFileSync('dashboard.tar.gz')).digest('hex')!==lock.archiveSha256)process.exit(1)"
+          mkdir dashboard-input
+          python3 -c "import tarfile; t=tarfile.open('dashboard.tar.gz'); t.extractall('dashboard-input',filter='data')"
+      - name: Set up Windows native toolchain
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            make
+            curl
+            xz
+      - name: Set up .NET for Windows containment helper
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build Windows containment helper
+        if: runner.os == 'Windows'
+        run: dotnet publish src/windows/JobRunner.csproj -c Release -r win-x64 --self-contained true -o build/windows
+      - name: Build LGPL FFmpeg on Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/packaging-ffmpeg-build.sh win32-x64
+      - name: Build LGPL FFmpeg on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/packaging-ffmpeg-build.sh '${{ matrix.target }}'
+      - name: Stage verified inputs
+        shell: bash
+        run: |
+          node scripts/packaging-inputs.mjs '${{ matrix.target }}' dashboard-input packaging-input.json
+          node scripts/packaging-stage.mjs packaging-input.json
+          node -e "console.log(require('path').join(process.cwd(), 'staging', 'tools'))" >> "$GITHUB_PATH"
+          if [[ '${{ matrix.target }}' == win32-* ]]; then node -e "console.log('JOB_RUNNER_PATH='+require('path').join(process.cwd(), 'staging','tools','StreamSnipe.JobRunner.exe'))" >> "$GITHUB_ENV"; fi
+      - name: Test Windows containment helper
+        if: runner.os == 'Windows'
+        run: node scripts/packaging-windows-smoke.cjs
+      - name: Test engine with bundled tools
+        run: npm test
+      - name: Windows recording and direct-upload smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:SOAK_SECONDS = '30'
+          $env:JOB_RUNNER_PATH = (Resolve-Path staging/tools/StreamSnipe.JobRunner.exe).Path
+          $env:FFMPEG_PATH = (Resolve-Path staging/tools/ffmpeg.exe).Path
+          $env:FFPROBE_PATH = (Resolve-Path staging/tools/ffprobe.exe).Path
+          node integration/soak.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node integration/direct-upload.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare stable signing credentials
+        if: ${{ github.event_name != 'workflow_dispatch' && !contains(github.ref_name, '-beta') }}
+        shell: bash
+        env:
+          MAC_CERT: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_KEY: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WIN_CERT: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [[ '${{ matrix.os }}' == macos* ]]; then
+            test -n "$MAC_CERT" && test -n "$MAC_CERT_PASSWORD" && test -n "$APPLE_KEY" && test -n "$APPLE_API_KEY_ID" && test -n "$APPLE_API_ISSUER"
+            printf '%s' "$APPLE_KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+            echo "STREAMSNIPE_STABLE=1" >> "$GITHUB_ENV"
+            echo "CSC_LINK=$MAC_CERT" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=$MAC_CERT_PASSWORD" >> "$GITHUB_ENV"
+          else
+            test -n "$WIN_CERT" && test -n "$WIN_CERT_PASSWORD"
+            echo "STREAMSNIPE_STABLE=1" >> "$GITHUB_ENV"
+            echo "WIN_CSC_LINK=$WIN_CERT" >> "$GITHUB_ENV"
+            echo "WIN_CSC_KEY_PASSWORD=$WIN_CERT_PASSWORD" >> "$GITHUB_ENV"
+          fi
+      - name: Build desktop candidate
+        working-directory: desktop
+        run: npm run pack -- ${{ matrix.flags }}
+      - name: Verify macOS signature and notarization
+        if: ${{ runner.os == 'macOS' && github.event_name != 'workflow_dispatch' && !contains(github.ref_name, '-beta') }}
+        shell: bash
+        run: |
+          app="artifacts/mac${{ matrix.target == 'darwin-arm64' && '-arm64' || '' }}/StreamSnipe.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+      - name: Verify Windows installer signature
+        if: ${{ runner.os == 'Windows' && github.event_name != 'workflow_dispatch' && !contains(github.ref_name, '-beta') }}
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem artifacts/*.exe
+          if (-not $files) { throw 'Missing Windows installer' }
+          foreach ($file in $files) { if ((Get-AuthenticodeSignature $file.FullName).Status -ne 'Valid') { throw "Invalid installer signature: $file" } }
+      - name: Prepare FFmpeg source and build materials
+        shell: bash
+        run: |
+          cp build/ffmpeg/${{ matrix.target }}/ffmpeg-source.tar.xz artifacts/ffmpeg-source-${{ matrix.target }}.tar.xz
+          cp build/ffmpeg/${{ matrix.target }}/build-ffmpeg.sh artifacts/build-ffmpeg-${{ matrix.target }}.sh
+          cp build/ffmpeg/${{ matrix.target }}/LICENSE.LGPLv2.1 artifacts/ffmpeg-license-${{ matrix.target }}.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: streamsnipe-${{ matrix.target }}
+          path: |
+            artifacts/*.dmg
+            artifacts/*.zip
+            artifacts/*.exe
+            artifacts/*.tar.xz
+            artifacts/*.sh
+            artifacts/*.txt
+          if-no-files-found: error
+
+  container:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: candidate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Fetch pinned dashboard archive
+        env:
+          DASHBOARD_URL: ${{ vars.DASHBOARD_ARTIFACT_URL }}
+        run: |
+          test -n "$DASHBOARD_URL"
+          curl --fail --location --proto '=https' "$DASHBOARD_URL" -o dashboard.tar.gz
+          test "$(sha256sum dashboard.tar.gz | cut -d' ' -f1)" = "$(python3 -c 'import json; print(json.load(open("scripts/packaging-dashboard.json"))["archiveSha256"])')"
+          mkdir -p staging/dashboard
+          python3 -c "import tarfile; t=tarfile.open('dashboard.tar.gz'); t.extractall('staging/dashboard',filter='data')"
+      - name: Smoke test amd64 image before publishing
+        run: |
+          docker buildx build --platform linux/amd64 --load -t streamsnipe:smoke .
+          docker run -d --rm --name streamsnipe-smoke -p 127.0.0.1:47821:47821 streamsnipe:smoke
+          trap 'docker stop streamsnipe-smoke || true' EXIT
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:47821/api/v1/info && break; sleep 1; done
+          curl -fsS http://127.0.0.1:47821/api/v1/info | grep '"mode":"docker"'
+          docker exec streamsnipe-smoke sh -c 'test "$(id -u)" -ne 0 && test "$(stat -c %a /data/setup-token)" = 600 && /opt/streamsnipe/tools/yt-dlp --version && ! ldd /opt/streamsnipe/tools/ffmpeg | grep -q "not found" && /opt/streamsnipe/tools/ffmpeg -L 2>/dev/null | grep -q "Lesser General Public" && /opt/streamsnipe/tools/ffmpeg -protocols 2>/dev/null | grep -q https && /opt/streamsnipe/tools/deno --version'
+      - name: Authenticate to GHCR
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish multiarchitecture image with provenance
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --push --tag "ghcr.io/fanclan/streamsnipe:${GITHUB_REF_NAME}" .
+
+  metadata:
+    needs: [candidate, container]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: streamsnipe-*
+          path: release-files
+          merge-multiple: true
+      - name: Create versioned checksums and download metadata
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path('release-files')
+          files = sorted(p for p in root.iterdir() if p.is_file())
+          if not files: raise SystemExit('No release artifacts')
+          records = [{'name':p.name, 'bytes':p.stat().st_size, 'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
+          version = os.environ['VERSION']
+          (root / f'SHA256SUMS-{version}.txt').write_text(''.join(f"{r['sha256']}  {r['name']}\n" for r in records))
+          (root / f'download-manifest-{version}.json').write_text(json.dumps({'version':version,'protocolVersion':1,'status':'candidate','files':records},indent=2)+'\n')
+          PYCODE
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: release-files/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-metadata-${{ github.ref_name }}
+          path: |
+            release-files/SHA256SUMS-*.txt
+            release-files/download-manifest-*.json

@@ -22,6 +22,7 @@ export interface Recording {
   status: RecordingStatus; quality: RecordingQuality; format: RecordingFormat;
   fileSize: number; duration?: number; startedAt: string; completedAt?: string;
   error?: string; hasPreview: boolean; hasThumbnail: boolean; uploadedToCloud: boolean;
+  uploadState?: 'uploading' | 'completed' | 'failed' | 'cancelled'; uploadProgress?: number;
 }
 export interface StartRecording {
   url: string; title?: string; channelId?: string; quality?: RecordingQuality; format?: RecordingFormat;
@@ -36,7 +37,13 @@ export interface Settings {
 }
 export type SettingsUpdate = Partial<Omit<Settings, 'hasS3Credentials' | 'lockedFields'>> & {
   s3AccessKeyId?: string; s3SecretAccessKey?: string;
+  uploadDestinationApproval?: string;
 };
+export type UploadDestination = Pick<Settings, 's3Enabled' | 's3Bucket' | 's3Region' | 's3Endpoint'>;
+export interface UploadApprovalRequest {id: string; expiresAt: string}
+export interface UploadApprovalStatus {
+  status: 'pending' | 'approved' | 'rejected' | 'expired'; approvalToken?: string;
+}
 export interface SystemStatus {
   activeRecordings: number; totalRecordings: number; totalChannels: number;
   disk: {total: number; used: number; available: number; usedPercent: number};

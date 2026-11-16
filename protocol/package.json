@@ -1,6 +1,6 @@
 {
   "name": "@fanclan/streamsnipe-protocol",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "StreamSnipe local companion API contracts, by the team at Fanclan.io",
   "type": "module",
   "types": "index.d.ts",

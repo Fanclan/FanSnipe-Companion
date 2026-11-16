@@ -1,0 +1,13 @@
+services:
+  streamsnipe:
+    image: ghcr.io/fanclan/streamsnipe:${STREAMSNIPE_VERSION:?Set STREAMSNIPE_VERSION to a verified published release tag}
+    ports:
+      - "${STREAMSNIPE_BIND:-127.0.0.1}:47821:47821"
+    volumes:
+      - streamsnipe-data:/data
+      - streamsnipe-media:/media
+    stop_grace_period: 180s
+    restart: unless-stopped
+volumes:
+  streamsnipe-data:
+  streamsnipe-media:

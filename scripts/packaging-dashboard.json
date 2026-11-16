@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "artifact": "dashboard-v0.1.0.tar.gz",
+  "archiveSha256": "f26df3d9b8734a2c89ce49fe664b7b558ec900c242461e0dd72512e6af146fe9",
+  "files": {
+    "assets/index-BP0NWU1n.css": "a89b3d38fadafe8deb8bc3630d01568addadeedf743f567642a6c91498fc5c23",
+    "assets/index-BzHTtzu4.js": "8493b9d2475bd5a2a3ce77a8f62032edfec52f203392205313950f9bf9baffd2",
+    "index.html": "929ee69225d351c5c797db829ae822b9391f2ce76cfdd6dae92b7ca1b60c206e"
+  }
+}

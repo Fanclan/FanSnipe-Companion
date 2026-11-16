@@ -32,7 +32,8 @@ const persist = () => writeFileSync(reportPath, JSON.stringify(report, null, 2))
 persist();
 console.log(JSON.stringify({ event: 'started', reportPath, ...report, samples: undefined }));
 const generator = spawn(ffmpeg, ['-hide_banner','-loglevel','error','-re','-f','lavfi','-i',
-  'testsrc2=size=320x180:rate=15','-c:v','mpeg2video','-b:v','400k','-g','30','-f','hls',
+  'testsrc2=size=320x180:rate=15','-f','lavfi','-i','sine=frequency=1000:sample_rate=48000',
+  '-c:v','mpeg2video','-b:v','400k','-g','30','-c:a','aac','-b:a','64k','-f','hls',
   '-hls_time','2','-hls_list_size','12','-hls_flags','delete_segments',path.join(source,'index.m3u8')],
   { stdio: ['ignore','ignore','pipe'] });
 let sourceError = '';
@@ -55,7 +56,7 @@ try {
   await new Promise(resolve => sourceServer.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${sourceServer.address().port}`;
   engine = createEngine({dataDir:path.join(work,'data'),recordingsPath,port:0,monitor:false,
-    ffmpegPath:ffmpeg,ffprobePath:ffprobe,fixtureOrigins:[origin]});
+    ffmpegPath:ffmpeg,ffprobePath:ffprobe,jobRunnerPath:process.env.JOB_RUNNER_PATH,fixtureOrigins:[origin]});
   const address = await engine.start();
   const base = `http://127.0.0.1:${address.port}/api/v1`;
   let token;
@@ -102,6 +103,8 @@ try {
     const result=spawnSync(ffprobe,['-v','error','-show_format','-show_streams','-of','json',path.join(recordingsPath,name)],{encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);const probed=JSON.parse(result.stdout);
     assert.ok(probed.format.format_name.includes('matroska'));
+    assert.ok(probed.streams.some(stream => stream.codec_type === 'video'), 'Video stream was lost');
+    assert.ok(probed.streams.some(stream => stream.codec_type === 'audio'), 'Audio stream was lost');
     assert.ok(Number(probed.format.duration)>=seconds*0.75,`Unexpected short output ${name}: ${probed.format.duration}`);
     report.media.push({name,duration:Number(probed.format.duration),format:probed.format.format_name,streams:probed.streams.length});
   }

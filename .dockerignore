@@ -1,0 +1,9 @@
+.git
+node_modules
+artifacts
+desktop
+staging/engine
+tests
+
+build
+integration

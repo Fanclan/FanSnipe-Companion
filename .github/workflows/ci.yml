@@ -26,6 +26,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - name: Direct upload and media boundary
+        run: node integration/direct-upload.mjs
       - name: Three-stream smoke
         run: node integration/soak.mjs
         env:

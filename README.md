@@ -1,5 +1,7 @@
 # StreamSnipe Companion
 
+![StreamSnipe — Your streams. Your storage. Built by Fanclan.io.](docs/social-preview.png)
+
 **Local stream recording for macOS, Windows, and Docker — by the team at [Fanclan.io](https://fanclan.io).**
 
 StreamSnipe pairs a web dashboard with a recording engine on your own computer. Follow channels, record live streams, browse your library, and play or download recordings without uploading them to Fanclan.

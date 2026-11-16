@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "StreamSnipe local companion API",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "By the team at Fanclan.io. Local-only recording and control API. Pairing and media-ticket details in README.md."
   },
   "servers": [
@@ -620,6 +620,22 @@
             }
           }
         }
+      },
+      "delete": {
+        "summary": "Cancel an in-progress direct upload",
+        "security": [
+          {
+            "pairedBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "403": {
+            "description": "Authorization or operator approval required"
+          }
+        }
       }
     },
     "/settings": {
@@ -702,6 +718,60 @@
           },
           "422": {
             "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/settings/s3-approvals": {
+      "post": {
+        "summary": "Request operator approval for the exact user-owned storage destination",
+        "security": [
+          {
+            "pairedBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "403": {
+            "description": "Authorization or operator approval required"
+          }
+        }
+      }
+    },
+    "/settings/s3-approvals/{id}": {
+      "get": {
+        "summary": "Poll a session-bound destination approval",
+        "security": [
+          {
+            "pairedBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "403": {
+            "description": "Authorization or operator approval required"
+          }
+        }
+      }
+    },
+    "/settings/s3-approvals/{id}/approve": {
+      "post": {
+        "summary": "Approve in Docker using the operator X-Setup-Token",
+        "security": [
+          {
+            "pairedBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "403": {
+            "description": "Authorization or operator approval required"
           }
         }
       }
