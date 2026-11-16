@@ -29,6 +29,10 @@ const engine = createEngine({
   ytDlpPath: process.env.YT_DLP_PATH,
   ffmpegPath: process.env.FFMPEG_PATH,
   ffprobePath: process.env.FFPROBE_PATH,
+  jsRuntimePath: process.env.JS_RUNTIME_PATH,
+  jobRunnerPath: process.env.JOB_RUNNER_PATH,
+  publicOrigin: process.env.PUBLIC_ORIGIN,
+  lockedFields: docker && process.env.RECORDINGS_PATH ? ["recordingsPath"] : [],
 });
 engine
   .start()

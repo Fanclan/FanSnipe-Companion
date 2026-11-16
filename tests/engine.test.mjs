@@ -118,6 +118,7 @@ test("fixture HLS is recorded, finalized and served with a scoped range ticket",
     port: 0,
     monitor: false,
     fixtureOrigins: [origin],
+    jobRunnerPath: process.env.JOB_RUNNER_PATH,
   });
   try {
     const addr = await engine.start();
@@ -183,6 +184,8 @@ test("fixture HLS is recorded, finalized and served with a scoped range ticket",
     const media = await fetch(ticket.url, { headers: { range: "bytes=0-9" } });
     assert.equal(media.status, 206);
     assert.equal((await media.arrayBuffer()).byteLength, 10);
+    await post(base + "/sessions/revoke", {}, headers);
+    assert.equal((await fetch(ticket.url)).status, 403);
   } finally {
     await engine.stop();
     await new Promise((resolve) => fixture.close(resolve));
@@ -448,10 +451,10 @@ test("remux failure preserves the partial capture and reports interruption", asy
     path.join(source, "index.m3u8"),
   ]);
   assert.equal(made.status, 0);
-  const wrapper = path.join(dir, "ffmpeg-wrapper");
+  const wrapper = path.join(dir, "ffmpeg-wrapper.cjs");
   fs.writeFileSync(
     wrapper,
-    '#!/bin/sh\ncase "$*" in *mpegts*) exec ffmpeg "$@";; *) exit 1;; esac\n',
+    'const {spawn}=require("node:child_process");const args=process.argv.slice(2);if(!args.includes("mpegts"))process.exit(1);const p=spawn("ffmpeg",args,{stdio:"inherit"});p.on("close",c=>process.exit(c ?? 1));',
     { mode: 0o755 },
   );
   const fixture = http.createServer((req, res) => {
@@ -469,7 +472,10 @@ test("remux failure preserves the partial capture and reports interruption", asy
     port: 0,
     monitor: false,
     fixtureOrigins: [origin],
-    ffmpegPath: wrapper,
+    jobRunnerPath: process.env.JOB_RUNNER_PATH,
+    ffmpegPath: process.execPath,
+    testFfmpegPrefixArgs: [wrapper],
+    jobRunnerPath: process.env.JOB_RUNNER_PATH,
   });
   try {
     const a = await engine.start(),
@@ -525,17 +531,19 @@ test("remux failure preserves the partial capture and reports interruption", asy
 test("stop waits for capture exit and validated finalization", async () => {
   const fs = await import("node:fs");
   const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-stop-"));
-  const fake = path.join(dir, "recorder");
+  const fake = path.join(dir, "recorder.cjs");
   fs.writeFileSync(
     fake,
-    '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "-o" ]; then out="$2"; break; fi; shift; done\nexec ffmpeg -y -v error -re -f lavfi -i testsrc=size=160x90:rate=10 -c:v mpeg2video -f mpegts "$out"\n',
+    'const {spawn}=require("node:child_process");const a=process.argv;const out=a[a.indexOf("-o")+1];const p=spawn("ffmpeg",["-y","-v","error","-re","-f","lavfi","-i","testsrc=size=160x90:rate=10","-c:v","mpeg2video","-f","mpegts",out],{stdio:"ignore"});p.on("close",c=>process.exit(c??1));',
     { mode: 0o755 },
   );
   const engine = createEngine({
     dataDir: path.join(dir, "data"),
     port: 0,
     monitor: false,
-    ytDlpPath: fake,
+    ytDlpPath: process.execPath,
+    testYtDlpPrefixArgs: [fake],
+    jobRunnerPath: process.env.JOB_RUNNER_PATH,
   });
   try {
     const a = await engine.start(),
@@ -565,13 +573,477 @@ test("stop waits for capture exit and validated finalization", async () => {
     const stopped = await (
       await post(base + "/recordings/" + r.id + "/stop", {}, headers)
     ).json();
-    assert.equal(stopped.status, "completed", JSON.stringify(stopped));
+    assert.equal(
+      stopped.status,
+      process.platform === "win32" ? "interrupted" : "completed",
+      JSON.stringify(stopped),
+    );
     assert.ok(stopped.fileSize > 0);
     assert.ok(stopped.duration > 0);
     assert.equal(
       (await (await fetch(base + "/status", { headers })).json())
         .activeRecordings,
       0,
+    );
+  } finally {
+    await engine.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("canonical catalog lease prevents a second constructor from changing live state", async () => {
+  const fs = await import("node:fs");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-lease-"));
+  const catalog = path.join(dir, "catalog");
+  fs.mkdirSync(catalog);
+  const alias = path.join(dir, "alias");
+  if (process.platform === "win32") fs.symlinkSync(catalog, alias, "junction");
+  else fs.symlinkSync(catalog, alias);
+  const first = createEngine({ dataDir: catalog, port: 0, monitor: false });
+  try {
+    assert.throws(
+      () => createEngine({ dataDir: alias, port: 0, monitor: false }),
+      /already in use/,
+    );
+  } finally {
+    await first.stop();
+  }
+  const next = createEngine({ dataDir: alias, port: 0, monitor: false });
+  await next.stop();
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("delayed live check never recreates a deleted channel", async () => {
+  const http = await import("node:http");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-check-"));
+  let release;
+  const arrived = new Promise((resolve) => {
+    release = resolve;
+  });
+  let finish;
+  const fixture = http.createServer((_req, res) => {
+    finish = () => res.end("#EXTM3U\n");
+    release();
+  });
+  await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${fixture.address().port}`;
+  const engine = createEngine({
+    dataDir: dir,
+    port: 0,
+    monitor: false,
+    fixtureOrigins: [origin],
+    jobRunnerPath: process.env.JOB_RUNNER_PATH,
+  });
+  try {
+    const a = await engine.start(),
+      base = `http://127.0.0.1:${a.port}/api/v1`;
+    const post = (url, body, headers = {}) =>
+      fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    const p = await (await post(base + "/pairings", { name: "test" })).json();
+    engine.auth.approve(p.id);
+    const { token } = await (
+      await fetch(base + "/pairings/" + p.id, {
+        headers: { "X-Pairing-Token": p.pollToken },
+      })
+    ).json();
+    const headers = { authorization: `Bearer ${token}` };
+    const c = await (
+      await post(
+        base + "/channels",
+        { name: "test", url: origin + "/live.m3u8" },
+        headers,
+      )
+    ).json();
+    const pending = post(`${base}/channels/${c.id}/check`, {}, headers);
+    await arrived;
+    await fetch(`${base}/channels/${c.id}`, { method: "DELETE", headers });
+    finish();
+    await pending;
+    assert.deepEqual(
+      await (await fetch(base + "/channels", { headers })).json(),
+      [],
+    );
+  } finally {
+    await engine.stop();
+    await new Promise((resolve) => fixture.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("S3 destination approval is session-bound and invalid settings do not mutate credentials", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-s3-approval-"));
+  const engine = createEngine({ dataDir: dir, port: 0, monitor: false });
+  try {
+    const a = await engine.start(),
+      base = `http://127.0.0.1:${a.port}/api/v1`;
+    const post = (url, body, headers = {}) =>
+      fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    async function session(name) {
+      const p = await (await post(base + "/pairings", { name })).json();
+      engine.auth.approve(p.id);
+      const token = (
+        await (
+          await fetch(base + "/pairings/" + p.id, {
+            headers: { "X-Pairing-Token": p.pollToken },
+          })
+        ).json()
+      ).token;
+      return {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      };
+    }
+    const h = await session("one"),
+      other = await session("two");
+    const destination = {
+      s3Enabled: true,
+      s3Bucket: "owned",
+      s3Region: "us-east-1",
+      s3Endpoint: "http://127.0.0.1:9000",
+    };
+    assert.equal(
+      (
+        await fetch(base + "/settings", {
+          method: "PUT",
+          headers: h,
+          body: JSON.stringify({
+            ...destination,
+            s3AccessKeyId: "not-saved",
+            s3SecretAccessKey: 123,
+          }),
+        })
+      ).status,
+      422,
+    );
+    const request = await (
+      await post(base + "/settings/s3-approvals", destination, h)
+    ).json();
+    assert.equal(
+      (
+        await fetch(base + "/settings/s3-approvals/" + request.id, {
+          headers: other,
+        })
+      ).status,
+      404,
+    );
+    assert.equal(engine.local.listUploadApprovals().length, 1);
+    assert.equal(engine.local.resolveUploadApproval(request.id, true), true);
+    const result = await (
+      await fetch(base + "/settings/s3-approvals/" + request.id, { headers: h })
+    ).json();
+    assert.equal(result.status, "approved");
+    assert.equal(
+      (
+        await fetch(base + "/settings", {
+          method: "PUT",
+          headers: other,
+          body: JSON.stringify({
+            ...destination,
+            uploadDestinationApproval: result.approvalToken,
+          }),
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(base + "/settings", {
+          method: "PUT",
+          headers: h,
+          body: JSON.stringify({
+            ...destination,
+            uploadDestinationApproval: result.approvalToken,
+            s3SecretAccessKey: "secret",
+          }),
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await (await fetch(base + "/settings", { headers: h })).json())
+        .hasS3Credentials,
+      false,
+    );
+    assert.equal(
+      (
+        await fetch(base + "/settings", {
+          method: "PUT",
+          headers: h,
+          body: JSON.stringify({ s3Enabled: false }),
+        })
+      ).status,
+      200,
+    );
+  } finally {
+    await engine.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("newer catalog schema is rejected without rewriting its version", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-future-"));
+  const file = path.join(dir, "engine.sqlite");
+  let db = new DatabaseSync(file);
+  db.exec("PRAGMA user_version=42");
+  db.close();
+  assert.throws(
+    () => createEngine({ dataDir: dir, port: 0, monitor: false }),
+    /Unsupported catalog version/,
+  );
+  db = new DatabaseSync(file, { readOnly: true });
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 42);
+  db.close();
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("finalization crash prefers preserved capture over an unvalidated output", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const fs = await import("node:fs");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-finalizing-"));
+  let engine = createEngine({ dataDir: dir, port: 0, monitor: false });
+  await engine.stop();
+  const root = fs.realpathSync(dir),
+    file = path.join(root, "video.mp4"),
+    capture = file + ".capture.ts",
+    staging = file + ".finalizing.mp4";
+  fs.writeFileSync(file, "incomplete");
+  fs.writeFileSync(capture, "valid capture");
+  fs.writeFileSync(staging, "incomplete staging");
+  const db = new DatabaseSync(path.join(dir, "engine.sqlite"));
+  db.prepare("INSERT INTO recordings VALUES (?,?)").run(
+    "crash",
+    JSON.stringify({
+      id: "crash",
+      managed: true,
+      mediaRoot: root,
+      filePath: file,
+      capturePath: capture,
+      stagingPath: staging,
+      status: "finalizing",
+      url: "https://www.twitch.tv/example",
+      platform: "twitch",
+      title: "crash",
+      quality: "best",
+      format: "mp4",
+      fileSize: 0,
+      startedAt: new Date().toISOString(),
+      uploadedToCloud: false,
+    }),
+  );
+  db.close();
+  engine = createEngine({ dataDir: dir, port: 0, monitor: false });
+  await engine.stop();
+  const check = new DatabaseSync(path.join(dir, "engine.sqlite"), {
+    readOnly: true,
+  });
+  const row = JSON.parse(
+    check.prepare("SELECT data FROM recordings WHERE id=?").get("crash").data,
+  );
+  assert.equal(row.status, "interrupted");
+  assert.equal(row.filePath, capture);
+  assert.equal(fs.readFileSync(capture, "utf8"), "valid capture");
+  check.close();
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("automatic retention preserves unmanaged imported metadata", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-retention-"));
+  let engine = createEngine({ dataDir: dir, port: 0, monitor: false });
+  await engine.stop();
+  const db = new DatabaseSync(path.join(dir, "engine.sqlite"));
+  db.prepare("INSERT INTO recordings VALUES (?,?)").run(
+    "imported",
+    JSON.stringify({
+      id: "imported",
+      managed: false,
+      status: "completed",
+      completedAt: "2020-01-01T00:00:00.000Z",
+    }),
+  );
+  db.prepare("INSERT INTO meta VALUES('settings',?)").run(
+    JSON.stringify({ autoCleanupEnabled: true, autoCleanupDays: 1 }),
+  );
+  db.close();
+  engine = createEngine({ dataDir: dir, port: 0 });
+  await engine.start();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await engine.stop();
+  const check = new DatabaseSync(path.join(dir, "engine.sqlite"), {
+    readOnly: true,
+  });
+  assert.ok(
+    check.prepare("SELECT id FROM recordings WHERE id=?").get("imported"),
+  );
+  check.close();
+  await rm(dir, { recursive: true, force: true });
+});
+
+test("catalog lease excludes a separate process", async () => {
+  const { spawn } = await import("node:child_process");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-lease-process-"));
+  const engine = createEngine({ dataDir: dir, port: 0, monitor: false });
+  try {
+    const moduleUrl = new URL("../dist/app.js", import.meta.url).href;
+    const code = `import {createEngine} from ${JSON.stringify(moduleUrl)};try{createEngine({dataDir:process.argv[1],port:0,monitor:false});process.exit(2)}catch(e){if(!String(e.message).includes('already in use'))process.exit(3)}`;
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "-e", code, dir],
+      { stdio: "ignore" },
+    );
+    const status = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(status, 0);
+  } finally {
+    await engine.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("engine crash terminates recorder descendants", async () => {
+  const { spawn } = await import("node:child_process");
+  const fs = await import("node:fs");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-crash-tree-"));
+  const pidFile = path.join(dir, "child.pid"),
+    childFile = path.join(dir, "child.cjs"),
+    recorder = path.join(dir, "recorder.cjs");
+  fs.writeFileSync(
+    childFile,
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000);`,
+  );
+  fs.writeFileSync(
+    recorder,
+    `require('child_process').spawn(process.execPath,[${JSON.stringify(childFile)}],{stdio:'ignore'});setInterval(()=>{},1000);`,
+  );
+  const appUrl = new URL("../dist/app.js", import.meta.url).href;
+  const code = `import {createEngine} from ${JSON.stringify(appUrl)};const e=createEngine({dataDir:process.argv[1],port:0,monitor:false,ytDlpPath:process.execPath,testYtDlpPrefixArgs:[process.argv[2]],jobRunnerPath:process.env.JOB_RUNNER_PATH});const a=await e.start();const base='http://127.0.0.1:'+a.port+'/api/v1';const p=await(await fetch(base+'/pairings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:'crash'})})).json();e.auth.approve(p.id);const t=(await(await fetch(base+'/pairings/'+p.id,{headers:{'X-Pairing-Token':p.pollToken}})).json()).token;await fetch(base+'/recordings/start',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+t},body:JSON.stringify({url:'https://www.twitch.tv/test'})});setInterval(()=>{},1000)`;
+  const parent = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", code, path.join(dir, "data"), recorder],
+    { stdio: "ignore", env: process.env },
+  );
+  let childPid;
+  try {
+    for (let i = 0; i < 100 && !childPid; i++) {
+      try {
+        childPid = Number(fs.readFileSync(pidFile, "utf8"));
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(childPid, "recorder descendant started");
+    parent.kill("SIGKILL");
+    await new Promise((resolve) => parent.once("close", resolve));
+    let alive = true;
+    for (let i = 0; i < 140; i++) {
+      try {
+        process.kill(childPid, 0);
+      } catch {
+        alive = false;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(alive, false, "recorder descendant exited after engine crash");
+  } finally {
+    if (parent.exitCode === null) parent.kill("SIGKILL");
+    if (childPid)
+      try {
+        process.kill(childPid, "SIGKILL");
+      } catch {}
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Docker setup token approves only the initiating session destination", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-docker-s3-"));
+  const engine = createEngine({
+    dataDir: dir,
+    port: 0,
+    mode: "docker",
+    setupToken: "local-secret",
+    monitor: false,
+  });
+  try {
+    const a = await engine.start(),
+      base = `http://127.0.0.1:${a.port}/api/v1`;
+    const post = (url, body, headers = {}) =>
+      fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    async function session(name) {
+      const p = await (await post(base + "/pairings", { name })).json();
+      assert.equal(
+        (
+          await post(
+            base + "/pairings/" + p.id + "/approve",
+            {},
+            { "X-Setup-Token": "local-secret" },
+          )
+        ).status,
+        200,
+      );
+      return {
+        authorization: `Bearer ${(await (await fetch(base + "/pairings/" + p.id, { headers: { "X-Pairing-Token": p.pollToken } })).json()).token}`,
+      };
+    }
+    const one = await session("one"),
+      two = await session("two");
+    const dest = {
+      s3Enabled: true,
+      s3Bucket: "mine",
+      s3Region: "us-east-1",
+      s3Endpoint: "http://127.0.0.1:9000",
+    };
+    const p = await (
+      await post(base + "/settings/s3-approvals", dest, one)
+    ).json();
+    assert.equal(
+      (
+        await post(
+          base + `/settings/s3-approvals/${p.id}/approve`,
+          {},
+          { ...one, "X-Setup-Token": "wrong" },
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await post(
+          base + `/settings/s3-approvals/${p.id}/approve`,
+          {},
+          { ...two, "X-Setup-Token": "local-secret" },
+        )
+      ).status,
+      404,
+    );
+    assert.equal(
+      (
+        await post(
+          base + `/settings/s3-approvals/${p.id}/approve`,
+          {},
+          { ...one, "X-Setup-Token": "local-secret" },
+        )
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await (
+          await fetch(base + `/settings/s3-approvals/${p.id}`, { headers: one })
+        ).json()
+      ).status,
+      "approved",
     );
   } finally {
     await engine.stop();

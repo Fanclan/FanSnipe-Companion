@@ -23,8 +23,15 @@ import {
   unlinkSync,
   createReadStream,
   realpathSync,
+  lstatSync,
+  openSync,
+  closeSync,
+  fstatSync,
+  constants,
+  renameSync,
 } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, WebSocket } from "ws";
 import { S3Client } from "@aws-sdk/client-s3";
@@ -40,11 +47,17 @@ export interface EngineOptions {
   ytDlpPath?: string;
   ffmpegPath?: string;
   ffprobePath?: string;
+  jsRuntimePath?: string;
+  jobRunnerPath?: string;
+  publicOrigin?: string;
+  lockedFields?: string[];
   mode?: "desktop" | "docker";
   allowedOrigins?: string[];
   setupToken?: string;
   monitor?: boolean;
   fixtureOrigins?: string[];
+  testFfmpegPrefixArgs?: string[];
+  testYtDlpPrefixArgs?: string[];
 }
 const now = () => new Date().toISOString();
 const token = () => randomBytes(32).toString("base64url");
@@ -74,18 +87,27 @@ const size = (p: string) => {
 };
 const run = (bin: string, args: string[], timeout = 30000) =>
   new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
-    const p = spawn(bin, args, { stdio: ["ignore", "pipe", "ignore"] });
+    const p = spawn(bin, args, {
+      stdio: ["pipe", "pipe", "ignore"],
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    });
     let out = "";
     p.stdout?.on("data", (b) => {
       if (out.length < 1_000_000) out += b;
     });
-    const timer = setTimeout(() => p.kill("SIGKILL"), timeout);
+    let force: NodeJS.Timeout | undefined;
+    const timer = setTimeout(() => {
+      if (p.stdin?.writable) p.stdin.write("stop\n");
+      force = setTimeout(() => p.kill("SIGKILL"), 8000);
+    }, timeout);
     p.once("error", (e) => {
       clearTimeout(timer);
+      if (force) clearTimeout(force);
       reject(e);
     });
     p.once("close", (code) => {
       clearTimeout(timer);
+      if (force) clearTimeout(force);
       resolve({ code, stdout: out });
     });
   });
@@ -99,9 +121,33 @@ export function createEngine(options: EngineOptions) {
   try {
     chmodSync(options.dataDir, 0o700);
   } catch {}
-  const db = new DatabaseSync(path.join(options.dataDir, "engine.sqlite"));
+  const canonicalDataDir = realpathSync(options.dataDir);
+  const lease = new DatabaseSync(
+    path.join(canonicalDataDir, ".catalog-lease.sqlite"),
+  );
+  try {
+    lease.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE");
+  } catch {
+    lease.close();
+    throw new Error("Recording catalog is already in use");
+  }
+  const db = new DatabaseSync(path.join(canonicalDataDir, "engine.sqlite"));
+  const version = Number(
+    (db.prepare("PRAGMA user_version").get() as Obj).user_version,
+  );
+  const existingTables = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .all() as Obj[];
+  if (version > 1 || (version === 0 && existingTables.length > 0)) {
+    db.close();
+    lease.exec("ROLLBACK");
+    lease.close();
+    throw new Error("Unsupported catalog version; catalog was not modified");
+  }
   db.exec(
-    "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS recordings (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL); PRAGMA user_version=1",
+    "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS recordings (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL); PRAGMA user_version=1; COMMIT;",
   );
   const get = (table: string, id: string): Obj | undefined => {
     const row = db.prepare(`SELECT data FROM ${table} WHERE id=?`).get(id) as
@@ -135,6 +181,7 @@ export function createEngine(options: EngineOptions) {
     s3Region: "us-east-1",
     s3Endpoint: "",
   };
+  const lockedFields = options.lockedFields ?? [];
   let settings: Obj = {
     ...defaults,
     ...JSON.parse(
@@ -144,6 +191,8 @@ export function createEngine(options: EngineOptions) {
       )?.value ?? "{}",
     ),
   };
+  for (const field of lockedFields)
+    if (field in defaults) settings[field] = (defaults as Obj)[field];
   const secretsPath = path.join(options.dataDir, "secrets.json");
   let secrets: Obj = {};
   try {
@@ -158,13 +207,18 @@ export function createEngine(options: EngineOptions) {
   const publicSettings = () => ({
     ...settings,
     hasS3Credentials: !!(secrets.s3AccessKeyId && secrets.s3SecretAccessKey),
+    lockedFields,
   });
   const app = express();
   app.disable("x-powered-by");
   const server = createServer(app);
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
   const authenticated = new Map<WebSocket, string>();
+  const mediaResponses = new Map<Response, string>();
   const closeSession = (id: string) => {
+    for (const [response, sessionId] of mediaResponses)
+      if (sessionId === id) response.destroy();
+    for (const [key, t] of tickets) if (t.sessionId === id) tickets.delete(key);
     for (const [ws, sessionId] of authenticated)
       if (sessionId === id) ws.close(1008, "Session revoked");
   };
@@ -183,27 +237,53 @@ export function createEngine(options: EngineOptions) {
   };
   const clients = new Map<string, Obj>(),
     tickets = new Map<string, Obj>(),
+    uploads = new Map<string, Upload>(),
+    uploadDone = new Map<string, Promise<void>>(),
     processes = new Map<
       string,
-      { child: ChildProcess; done: Promise<void>; stop: boolean }
+      {
+        child: ChildProcess;
+        done: Promise<void>;
+        stop: boolean;
+        forced?: boolean;
+        stopPromise?: Promise<Obj>;
+        reason?: string;
+      }
     >();
   let monitorTimer: NodeJS.Timeout | undefined,
     healthTimer: NodeJS.Timeout | undefined,
     monitoring = false,
     stopping = false,
     started = false;
+  const publicOrigin = options.publicOrigin
+    ? new URL(options.publicOrigin).origin
+    : undefined;
+  if (
+    mode === "docker" &&
+    options.publicOrigin &&
+    options.publicOrigin !== publicOrigin
+  )
+    throw Error("PUBLIC_ORIGIN must be an exact origin");
   const safeOrigin = (origin: string | undefined, requestHost?: string) =>
     !origin ||
-    (options.allowedOrigins ?? []).includes(origin) ||
-    (!!requestHost &&
-      origin === `http://${requestHost}` &&
-      (mode === "docker" ||
-        /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(requestHost)));
+    (mode === "docker"
+      ? publicOrigin
+        ? origin === publicOrigin
+        : !!requestHost && origin === `http://${requestHost}`
+      : (options.allowedOrigins ?? []).includes(origin) ||
+        (!!requestHost &&
+          origin === `http://${requestHost}` &&
+          /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(requestHost)));
+  const validHost = (requestHost: string) =>
+    mode !== "docker" ||
+    !publicOrigin ||
+    requestHost === new URL(publicOrigin).host;
   app.use((req, res, next) => {
     const h = req.headers.host ?? "";
     const hostname = h.startsWith("[")
       ? h.slice(1, h.indexOf("]"))
       : h.split(":")[0];
+    if (!validHost(h)) return err(res, 403, "Invalid Host");
     if (
       mode === "desktop" &&
       !["127.0.0.1", "localhost", "::1"].includes(hostname)
@@ -228,6 +308,9 @@ export function createEngine(options: EngineOptions) {
     next();
   });
   app.use(express.json({ limit: "64kb" }));
+  app.use((_req, res, next) =>
+    stopping ? err(res, 503, "Engine is shutting down") : next(),
+  );
   const api = express.Router();
   app.use("/api/v1", api);
   api.get("/info", (_req, res) =>
@@ -241,6 +324,12 @@ export function createEngine(options: EngineOptions) {
   const rate = new Map<string, number[]>();
   api.post("/pairings", (req, res) => {
     const ip = req.ip ?? "";
+    for (const [key, p] of clients)
+      if (Date.parse(p.expiresAt) <= Date.now()) clients.delete(key);
+    for (const [key, times] of rate)
+      if (!times.some((t) => Date.now() - t < 120000)) rate.delete(key);
+    if (clients.size >= 100 || (rate.size >= 1000 && !rate.has(ip)))
+      return err(res, 429, "Too many pairing requests");
     const times = (rate.get(ip) ?? []).filter((t) => Date.now() - t < 120000);
     if (times.length >= 10) return err(res, 429, "Too many pairing requests");
     times.push(Date.now());
@@ -389,9 +478,9 @@ export function createEngine(options: EngineOptions) {
           : u.hostname.includes("chaturbate")
             ? "chaturbate"
             : "other";
-  const disk = () => {
-    mkdirSync(settings.recordingsPath, { recursive: true });
-    const s = statfsSync(settings.recordingsPath);
+  const disk = (folder = settings.recordingsPath) => {
+    mkdirSync(folder, { recursive: true });
+    const s = statfsSync(folder);
     const total = Number(s.blocks) * Number(s.bsize),
       available = Number(s.bavail) * Number(s.bsize),
       used = total - Number(s.bfree) * Number(s.bsize);
@@ -403,7 +492,16 @@ export function createEngine(options: EngineOptions) {
     };
   };
   const dto = (r: Obj): Obj => {
-    const { filePath, previewPath, thumbnailPath, managed, ...rest } = r;
+    const {
+      filePath,
+      previewPath,
+      thumbnailPath,
+      mediaRoot,
+      managed,
+      capturePath,
+      stagingPath,
+      ...rest
+    } = r;
     return {
       ...rest,
       hasPreview: !!previewPath && existsSync(previewPath),
@@ -411,9 +509,34 @@ export function createEngine(options: EngineOptions) {
     };
   };
   const update = (r: Obj, patch: Obj) => {
-    Object.assign(r, patch);
-    put("recordings", r);
-    broadcast("recording_update", dto(r));
+    const current = get("recordings", r.id);
+    if (!current) return;
+    Object.assign(current, patch);
+    Object.assign(r, current);
+    put("recordings", current);
+    broadcast("recording_update", dto(current));
+  };
+  const runTool = (bin: string, args: string[], timeout: number) => {
+    if (process.platform === "win32") {
+      if (!options.jobRunnerPath)
+        return Promise.reject(
+          new Error("Windows process containment helper unavailable"),
+        );
+      return run(
+        options.jobRunnerPath,
+        [String(process.pid), bin, ...args],
+        timeout,
+      );
+    }
+    return run(
+      process.execPath,
+      [
+        fileURLToPath(new URL("./supervisor.js", import.meta.url)),
+        bin,
+        ...args,
+      ],
+      timeout,
+    );
   };
   async function checkLive(url: string) {
     const u = validateUrl(url);
@@ -424,9 +547,16 @@ export function createEngine(options: EngineOptions) {
       });
       return response.ok && (await response.text()).includes("#EXTM3U");
     }
-    const result = await run(
+    const result = await runTool(
       options.ytDlpPath ?? "yt-dlp",
       [
+        "--ignore-config",
+        "--no-plugin-dirs",
+        "--ffmpeg-location",
+        options.ffmpegPath ?? "ffmpeg",
+        ...(options.jsRuntimePath
+          ? ["--js-runtimes", `deno:${options.jsRuntimePath}`]
+          : []),
         "--no-playlist",
         "--skip-download",
         "--print",
@@ -445,9 +575,15 @@ export function createEngine(options: EngineOptions) {
     );
   }
   async function finish(r: Obj, success: boolean) {
-    update(r, { status: "finalizing" });
-    const temp = r.filePath + ".capture.ts";
-    if (!existsSync(temp) || !size(temp)) {
+    const output = r.filePath;
+    const capture = r.capturePath ?? output + ".capture.ts";
+    const staging = output + `.finalizing.${r.format}`;
+    update(r, {
+      status: "finalizing",
+      capturePath: capture,
+      stagingPath: staging,
+    });
+    if (!existsSync(capture) || !size(capture)) {
       update(r, {
         status: "failed",
         error: "Recording produced no media",
@@ -455,88 +591,135 @@ export function createEngine(options: EngineOptions) {
       });
       return;
     }
-    let output = r.filePath;
     try {
-      if (r.format === "ts") {
-        output = temp;
-      } else {
-        const result = await run(
-          options.ffmpegPath ?? "ffmpeg",
-          ["-y", "-v", "error", "-i", temp, "-map", "0", "-c", "copy", output],
-          120000,
-        );
-        if (result.code !== 0) throw Error("Remux failed");
-      }
-      const probe = await run(
+      const remux = await runTool(
+        options.ffmpegPath ?? "ffmpeg",
+        [
+          ...(options.testFfmpegPrefixArgs ?? []),
+          "-y",
+          "-v",
+          "error",
+          "-i",
+          capture,
+          "-map",
+          "0",
+          "-c",
+          "copy",
+          ...(r.format === "ts" ? ["-f", "mpegts"] : []),
+          staging,
+        ],
+        120000,
+      );
+      if (remux.code !== 0) throw Error("Remux failed");
+      const probe = await runTool(
         options.ffprobePath ?? "ffprobe",
         [
           "-v",
           "error",
           "-show_entries",
-          "format=duration",
+          "format=duration,format_name:stream=codec_type",
           "-of",
           "json",
-          output,
+          staging,
         ],
         30000,
       );
       if (probe.code !== 0) throw Error("Media validation failed");
-      const duration =
-        Number(JSON.parse(probe.stdout).format?.duration) || undefined;
-      if (output !== temp) unlinkSync(temp);
-      else {
-        r.filePath = temp;
+      const metadata = JSON.parse(probe.stdout),
+        names = String(metadata.format?.format_name ?? "").split(",");
+      const container =
+        r.format === "mp4"
+          ? names.includes("mp4")
+          : r.format === "mkv"
+            ? names.includes("matroska")
+            : names.includes("mpegts");
+      if (
+        !container ||
+        !Array.isArray(metadata.streams) ||
+        !metadata.streams.some(
+          (stream: Obj) =>
+            stream.codec_type === "video" || stream.codec_type === "audio",
+        )
+      )
+        throw Error("Media validation failed");
+      const duration = Number(metadata.format?.duration) || undefined;
+      renameSync(staging, output);
+      update(r, {
+        filePath: output,
+        stagingPath: undefined,
+        fileSize: size(output),
+        duration,
+      });
+      try {
+        unlinkSync(capture);
+        update(r, { capturePath: undefined });
+      } catch {
+        /* retained for safe later cleanup */
+      }
+      const thumb = output + ".jpg",
+        preview = output + ".preview.jpg";
+      let thumbPath: string | undefined, previewPath: string | undefined;
+      try {
+        const image = await runTool(
+          options.ffmpegPath ?? "ffmpeg",
+          [
+            ...(options.testFfmpegPrefixArgs ?? []),
+            "-y",
+            "-v",
+            "error",
+            "-ss",
+            "0",
+            "-i",
+            output,
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=320:-2",
+            thumb,
+          ],
+          30000,
+        );
+        if (image.code === 0 && size(thumb)) thumbPath = thumb;
+        const interval = Math.max(1, Math.floor((duration ?? 12) / 12));
+        const collage = await runTool(
+          options.ffmpegPath ?? "ffmpeg",
+          [
+            ...(options.testFfmpegPrefixArgs ?? []),
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            output,
+            "-vf",
+            `fps=1/${interval},scale=160:-2,tile=4x3`,
+            "-frames:v",
+            "1",
+            preview,
+          ],
+          30000,
+        );
+        if (collage.code === 0 && size(preview)) previewPath = preview;
+      } catch {
+        /* image generation is optional */
       }
       update(r, {
         status: success ? "completed" : "interrupted",
-        fileSize: size(output),
-        duration,
         completedAt: now(),
-        ...(success ? {} : { error: "Recorder exited unexpectedly" }),
+        thumbnailPath: thumbPath,
+        previewPath,
+        ...(success
+          ? {}
+          : { error: "Recorder stopped before normal completion" }),
       });
-      const thumb = output + ".jpg";
-      const preview = output + ".preview.jpg";
-      const image = await run(
-        options.ffmpegPath ?? "ffmpeg",
-        [
-          "-y",
-          "-v",
-          "error",
-          "-ss",
-          "0",
-          "-i",
-          output,
-          "-frames:v",
-          "1",
-          "-vf",
-          "scale=320:-2",
-          thumb,
-        ],
-        30000,
-      );
-      if (image.code === 0 && size(thumb)) {
-        try {
-          const fs = await import("node:fs");
-          fs.copyFileSync(thumb, preview);
-        } catch {}
-        update(r, {
-          thumbnailPath: thumb,
-          previewPath: existsSync(preview) ? preview : undefined,
-        });
-      }
-    } catch (e) {
-      // Preview generation is optional after a validated recording. Never
-      // downgrade a completed file because a thumbnail tool is unavailable.
-      if (
-        r.status === "completed" ||
-        (r.status === "interrupted" && !existsSync(temp))
-      )
-        return;
-      if (existsSync(temp)) r.filePath = temp;
+    } catch {
+      if (existsSync(capture)) r.filePath = capture;
       update(r, {
         status: "interrupted",
-        error: e instanceof Error ? e.message : "Finalization failed",
-        fileSize: size(temp),
+        filePath: r.filePath,
+        capturePath: capture,
+        stagingPath: staging,
+        error: "Finalization failed",
+        fileSize: size(capture),
         completedAt: now(),
       });
     }
@@ -562,7 +745,10 @@ export function createEngine(options: EngineOptions) {
       throw Object.assign(Error("Disk usage limit reached"), { status: 507 });
     mkdirSync(settings.recordingsPath, { recursive: true });
     const id = randomUUID(),
-      filePath = path.join(settings.recordingsPath, `${id}.${format}`);
+      filePath = path.join(
+        realpathSync(settings.recordingsPath),
+        `${id}.${format}`,
+      );
     const r: Obj = {
       id,
       managed: true,
@@ -577,12 +763,15 @@ export function createEngine(options: EngineOptions) {
       quality,
       format,
       filePath,
+      mediaRoot: realpathSync(settings.recordingsPath),
       fileSize: 0,
       startedAt: now(),
       uploadedToCloud: false,
     };
     put("recordings", r);
     const capture = filePath + ".capture.ts";
+    r.capturePath = capture;
+    put("recordings", r);
     const map: Obj = {
       best: "best",
       "1080p": "best[height<=1080]/best",
@@ -606,6 +795,13 @@ export function createEngine(options: EngineOptions) {
           capture,
         ]
       : [
+          "--ignore-config",
+          "--no-plugin-dirs",
+          "--ffmpeg-location",
+          options.ffmpegPath ?? "ffmpeg",
+          ...(options.jsRuntimePath
+            ? ["--js-runtimes", `deno:${options.jsRuntimePath}`]
+            : []),
           "--no-playlist",
           "--no-part",
           "--hls-use-mpegts",
@@ -617,30 +813,80 @@ export function createEngine(options: EngineOptions) {
           "--",
           u.href,
         ];
+    const recorder = fixture(u)
+      ? (options.ffmpegPath ?? "ffmpeg")
+      : (options.ytDlpPath ?? "yt-dlp");
+    if (process.platform === "win32" && !options.jobRunnerPath) {
+      update(r, {
+        status: "failed",
+        error: "Windows process containment helper unavailable",
+        completedAt: now(),
+      });
+      throw Error("Windows process containment helper unavailable");
+    }
     const child = spawn(
-      fixture(u)
-        ? (options.ffmpegPath ?? "ffmpeg")
-        : (options.ytDlpPath ?? "yt-dlp"),
-      args,
-      { stdio: ["pipe", "ignore", "ignore"] },
+      process.platform === "win32" ? options.jobRunnerPath! : process.execPath,
+      process.platform === "win32"
+        ? [
+            String(process.pid),
+            recorder,
+            ...(fixture(u)
+              ? (options.testFfmpegPrefixArgs ?? [])
+              : (options.testYtDlpPrefixArgs ?? [])),
+            ...args,
+          ]
+        : [
+            fileURLToPath(new URL("./supervisor.js", import.meta.url)),
+            recorder,
+            ...(fixture(u)
+              ? (options.testFfmpegPrefixArgs ?? [])
+              : (options.testYtDlpPrefixArgs ?? [])),
+            ...args,
+          ],
+      {
+        stdio: ["pipe", "ignore", "ignore"],
+        detached: process.platform !== "win32",
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      },
     );
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
     });
-    const entry = { child, done, stop: false };
+    const entry: {
+      child: ChildProcess;
+      done: Promise<void>;
+      stop: boolean;
+      forced?: boolean;
+      stopPromise?: Promise<Obj>;
+      reason?: string;
+    } = { child, done, stop: false };
     processes.set(id, entry);
     child.once("error", (e) => {
       update(r, {
         status: "failed",
-        error: `Recorder failed: ${e.message}`,
+        error: "Recorder could not start",
         completedAt: now(),
       });
     });
     child.once("spawn", () => update(r, { status: "recording" }));
     child.once("close", async (code) => {
       try {
-        if (r.status !== "failed") await finish(r, code === 0 || entry.stop);
+        if (entry.reason === "process tree did not exit") {
+          const capture = r.capturePath ?? r.filePath + ".capture.ts";
+          update(r, {
+            status: "interrupted",
+            filePath: capture,
+            capturePath: capture,
+            fileSize: size(capture),
+            error: "Recorder process tree did not exit",
+            completedAt: now(),
+          });
+        } else if (r.status !== "failed")
+          await finish(
+            r,
+            (code === 0 || entry.stop) && !entry.forced && !entry.reason,
+          );
       } finally {
         processes.delete(id);
         resolveDone();
@@ -649,40 +895,149 @@ export function createEngine(options: EngineOptions) {
     broadcast("recording_update", dto(r));
     return r;
   }
-  async function stopRecording(id: string) {
+  async function stopRecording(id: string, reason?: string) {
     const p = processes.get(id),
       r = get("recordings", id);
     if (!p || !r)
       throw Object.assign(Error("Recording is not active"), { status: 409 });
+    if (p.stopPromise) return p.stopPromise;
     p.stop = true;
-    update(r, { status: "stopping" });
-    if (fixture(new URL(r.url)) && p.child.stdin?.writable)
-      p.child.stdin.write("q\n");
-    else p.child.kill("SIGINT");
-    const timer = setTimeout(() => p.child.kill("SIGTERM"), 5000);
-    const force = setTimeout(() => p.child.kill("SIGKILL"), 12000);
-    await p.done;
-    clearTimeout(timer);
-    clearTimeout(force);
-    return get("recordings", id)!;
+    p.reason = reason;
+    p.stopPromise = (async () => {
+      if (r.status !== "finalizing") update(r, { status: "stopping" });
+      const signal = (sig: NodeJS.Signals) => {
+        if (process.platform === "win32") {
+          if (p.child.stdin?.writable) p.child.stdin.write("stop\n");
+          p.forced = true;
+        } else if (p.child.pid) {
+          try {
+            process.kill(-p.child.pid, sig);
+          } catch {}
+        }
+      };
+      if (p.child.stdin?.writable) {
+        p.child.stdin.write("stop\n");
+        if (process.platform === "win32") p.forced = true;
+      } else signal("SIGINT");
+      const timer = setTimeout(() => {
+        p.forced = true;
+        signal("SIGTERM");
+      }, 5000);
+      const force = setTimeout(() => {
+        p.forced = true;
+        signal("SIGKILL");
+        if (process.platform === "win32") p.child.kill();
+      }, 12000);
+      await p.done;
+      clearTimeout(timer);
+      clearTimeout(force);
+      return get("recordings", id)!;
+    })();
+    return p.stopPromise;
   }
-  for (const r of all("recordings"))
+  for (const r of all("recordings")) {
+    if (r.managed === true && !r.mediaRoot && typeof r.filePath === "string") {
+      try {
+        const root = realpathSync(settings.recordingsPath);
+        if (realpathSync(path.dirname(r.filePath)) === root) {
+          r.mediaRoot = root;
+          r.filePath = path.join(root, path.basename(r.filePath));
+          put("recordings", r);
+        }
+      } catch {}
+    }
     if (activeStates.includes(r.status)) {
       r.status = "interrupted";
       r.error = "Engine restarted during recording";
       r.completedAt = now();
-      if (!existsSync(r.filePath) && existsSync(r.filePath + ".capture.ts")) {
-        r.filePath = r.filePath + ".capture.ts";
-        r.fileSize = size(r.filePath);
+      const capture = r.capturePath ?? r.filePath + ".capture.ts";
+      if (existsSync(capture)) {
+        r.capturePath = capture;
+        r.filePath = capture;
+        r.fileSize = size(capture);
       }
       put("recordings", r);
     }
+  }
   api.use(requireAuth);
+  api.post("/settings/s3-approvals", (req, res) => {
+    const destination = Object.fromEntries(
+      ["s3Enabled", "s3Bucket", "s3Region", "s3Endpoint"].map((k) => [
+        k,
+        req.body?.[k],
+      ]),
+    );
+    if (
+      typeof destination.s3Enabled !== "boolean" ||
+      ["s3Bucket", "s3Region", "s3Endpoint"].some(
+        (k) => typeof destination[k] !== "string",
+      )
+    )
+      return err(res, 422, "Invalid destination");
+    for (const [id, item] of approvalRequests)
+      if (Date.parse(item.expiresAt) <= Date.now()) approvalRequests.delete(id);
+    if (approvalRequests.size >= 100)
+      return err(res, 429, "Too many approval requests");
+    const id = randomUUID(),
+      expiresAt = new Date(Date.now() + 120000).toISOString();
+    approvalRequests.set(id, {
+      id,
+      sessionId: res.locals.session.id,
+      destination,
+      expiresAt,
+      status: "pending",
+    });
+    return res.status(201).json({ id, expiresAt });
+  });
+  api.post("/settings/s3-approvals/:id/approve", (req, res) => {
+    if (
+      mode !== "docker" ||
+      !options.setupToken ||
+      !equal(String(req.headers["x-setup-token"] ?? ""), options.setupToken)
+    )
+      return err(res, 403, "Setup denied");
+    const item = approvalRequests.get(String(req.params.id));
+    if (!item || item.sessionId !== res.locals.session.id)
+      return err(res, 404, "Approval request not found");
+    return local.resolveUploadApproval(item.id, true)
+      ? res.json({ status: "approved" })
+      : err(res, 409, "Approval request expired or resolved");
+  });
+  api.get("/settings/s3-approvals/:id", (req, res) => {
+    const item = approvalRequests.get(String(req.params.id));
+    if (!item || item.sessionId !== res.locals.session.id)
+      return err(res, 404, "Approval request not found");
+    if (Date.parse(item.expiresAt) <= Date.now()) {
+      approvalRequests.delete(item.id);
+      return res.json({ status: "expired" });
+    }
+    const result = {
+      status: item.status,
+      ...(item.approvalToken ? { approvalToken: item.approvalToken } : {}),
+    };
+    if (item.approvalToken) {
+      delete item.approvalToken;
+      approvalRequests.delete(item.id);
+    }
+    return res.json(result);
+  });
   api.get("/settings", (_req, res) => res.json(publicSettings()));
   api.put("/settings", (req, res) => {
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body))
+      return err(res, 422, "Invalid settings");
     const next = { ...settings };
     for (const key of Object.keys(defaults))
-      if (key in (req.body ?? {})) next[key] = req.body[key];
+      if (key in (req.body ?? {})) {
+        if (key === "recordingsPath" && req.body[key] !== settings[key])
+          return err(
+            res,
+            403,
+            "Use the local folder picker to change recordings path",
+          );
+        if (lockedFields.includes(key) && req.body[key] !== settings[key])
+          return err(res, 403, "Setting is locked");
+        next[key] = req.body[key];
+      }
     if (
       typeof next.recordingsPath !== "string" ||
       !path.isAbsolute(next.recordingsPath) ||
@@ -706,15 +1061,78 @@ export function createEngine(options: EngineOptions) {
       )
     )
       return err(res, 422, "Invalid settings");
+    if (next.s3Endpoint) {
+      try {
+        const endpoint = new URL(next.s3Endpoint);
+        if (
+          !["http:", "https:"].includes(endpoint.protocol) ||
+          endpoint.username ||
+          endpoint.password ||
+          endpoint.search ||
+          endpoint.hash ||
+          ["fanclan.io", "vercel.app", "vercel.com"].some(
+            (d) =>
+              endpoint.hostname === d || endpoint.hostname.endsWith("." + d),
+          )
+        )
+          return err(res, 422, "Invalid S3 endpoint");
+      } catch {
+        return err(res, 422, "Invalid S3 endpoint");
+      }
+    }
+    const nextSecrets = { ...secrets };
     for (const k of ["s3AccessKeyId", "s3SecretAccessKey"])
       if (k in req.body) {
         if (typeof req.body[k] !== "string")
           return err(res, 422, "Invalid credentials");
-        secrets[k] = req.body[k];
+        nextSecrets[k] = req.body[k];
       }
-    settings = next;
-    saveSettings();
-    writeFileSync(secretsPath, JSON.stringify(secrets), { mode: 0o600 });
+    const changedDestination = [
+      "s3Enabled",
+      "s3Bucket",
+      "s3Region",
+      "s3Endpoint",
+    ].some((k) => next[k] !== settings[k]);
+    const disablingOnly =
+      settings.s3Enabled === true &&
+      next.s3Enabled === false &&
+      ["s3Bucket", "s3Region", "s3Endpoint"].every(
+        (k) => next[k] === settings[k],
+      );
+    const destination = JSON.stringify(
+      ["s3Enabled", "s3Bucket", "s3Region", "s3Endpoint"].map((k) => next[k]),
+    );
+    const approval = destinationApprovals.get(
+      String(req.body.uploadDestinationApproval ?? ""),
+    );
+    if (
+      changedDestination &&
+      !disablingOnly &&
+      (!approval ||
+        approval.destination !== destination ||
+        approval.sessionId !== res.locals.session.id ||
+        Date.parse(approval.expiresAt) <= Date.now())
+    )
+      return err(res, 403, "Local approval of upload destination required");
+    if (changedDestination && !disablingOnly)
+      destinationApprovals.delete(String(req.body.uploadDestinationApproval));
+    const oldSettings = settings,
+      oldSecrets = secrets;
+    try {
+      const temporary = secretsPath + ".tmp";
+      writeFileSync(temporary, JSON.stringify(nextSecrets), { mode: 0o600 });
+      renameSync(temporary, secretsPath);
+      settings = next;
+      secrets = nextSecrets;
+      saveSettings();
+    } catch {
+      settings = oldSettings;
+      secrets = oldSecrets;
+      try {
+        writeFileSync(secretsPath, JSON.stringify(oldSecrets), { mode: 0o600 });
+      } catch {}
+      return err(res, 500, "Could not save settings");
+    }
     try {
       chmodSync(secretsPath, 0o600);
     } catch {}
@@ -780,9 +1198,12 @@ export function createEngine(options: EngineOptions) {
   });
   async function check(c: Obj) {
     const isLive = await checkLive(c.url);
-    Object.assign(c, { isLive, lastChecked: now(), updatedAt: now() });
-    put("channels", c);
-    broadcast("channel_update", c);
+    const current = get("channels", c.id);
+    if (!current || current.url !== c.url || current.updatedAt !== c.updatedAt)
+      return false;
+    Object.assign(current, { isLive, lastChecked: now(), updatedAt: now() });
+    put("channels", current);
+    broadcast("channel_update", current);
     return isLive;
   }
   api.post("/channels/:id/check", async (req, res) => {
@@ -851,7 +1272,19 @@ export function createEngine(options: EngineOptions) {
       return err(
         res,
         (e as Obj).status ?? 422,
-        e instanceof Error ? e.message : "Invalid recording",
+        e instanceof Error &&
+          [
+            "Invalid URL",
+            "Unsupported URL",
+            "HTTPS required",
+            "Invalid quality or format",
+            "Recording limit reached",
+            "Channel already recording",
+            "Disk usage limit reached",
+            "Windows process containment helper unavailable",
+          ].includes(e.message)
+          ? e.message
+          : "Could not start recording",
       );
     }
   });
@@ -870,34 +1303,76 @@ export function createEngine(options: EngineOptions) {
     const r = get("recordings", req.params.id);
     return r ? res.json(dto(r)) : err(res, 404, "Recording not found");
   });
+  function openMedia(r: Obj, file: string): number {
+    if (typeof file !== "string" || typeof r.mediaRoot !== "string")
+      throw Error("Media unavailable");
+    const root = realpathSync(r.mediaRoot);
+    const parent = realpathSync(path.dirname(file));
+    const relative = path.relative(root, parent);
+    if (
+      relative.startsWith(".." + path.sep) ||
+      relative === ".." ||
+      path.isAbsolute(relative) ||
+      path.dirname(path.resolve(file)) !== parent
+    )
+      throw Error("Media outside approved folder");
+    let cursor = root;
+    for (const part of relative.split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, part);
+      if (lstatSync(cursor).isSymbolicLink())
+        throw Error("Media folder contains a symlink");
+    }
+    const st = lstatSync(file);
+    if (!st.isFile() || st.isSymbolicLink())
+      throw Error("Media is not a regular file");
+    const fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    if (!fstatSync(fd).isFile()) {
+      closeSync(fd);
+      throw Error("Media is not a regular file");
+    }
+    return fd;
+  }
   function safeDelete(r: Obj) {
     if (r.managed !== true) {
       del("recordings", r.id);
       return;
     }
-    for (const p of [r.filePath, r.previewPath, r.thumbnailPath])
-      if (typeof p === "string" && existsSync(p)) {
-        try {
-          const root = realpathSync(path.dirname(r.filePath));
-          const real = realpathSync(p);
-          if (path.dirname(real) === root) unlinkSync(real);
-        } catch {}
-      }
+    const files = [
+      r.filePath,
+      r.capturePath,
+      r.stagingPath,
+      r.previewPath,
+      r.thumbnailPath,
+    ];
+    for (const file of new Set(files)) {
+      if (typeof file !== "string" || !existsSync(file)) continue;
+      const fd = openMedia(r, file);
+      closeSync(fd);
+      unlinkSync(file);
+    }
     del("recordings", r.id);
   }
   api.delete("/recordings/:id", (req, res) => {
     const r = get("recordings", req.params.id);
     if (!r) return err(res, 404, "Recording not found");
-    if (activeStates.includes(r.status))
+    if (activeStates.includes(r.status) || uploads.has(r.id))
       return err(res, 409, "Recording is active");
-    safeDelete(r);
+    try {
+      safeDelete(r);
+    } catch {
+      return err(res, 409, "Could not safely remove recording");
+    }
+    for (const [key, t] of tickets)
+      if (t.recordingId === r.id) tickets.delete(key);
     return res.json({ ok: true });
   });
   api.post("/recordings/:id/upload", async (req, res) => {
     const r = get("recordings", req.params.id);
     if (!r) return err(res, 404, "Recording not found");
-    if (activeStates.includes(r.status))
-      return err(res, 409, "Recording is active");
+    if (activeStates.includes(r.status) || uploads.has(r.id))
+      return err(res, 409, "Recording is busy");
+    if (r.uploadedToCloud)
+      return res.json({ uploadedToCloud: true, uploadState: "completed" });
     if (
       !settings.s3Enabled ||
       !settings.s3Bucket ||
@@ -906,6 +1381,23 @@ export function createEngine(options: EngineOptions) {
     )
       return err(res, 422, "S3 is not configured");
     try {
+      if (settings.s3Endpoint) {
+        const endpoint = new URL(settings.s3Endpoint);
+        if (
+          !["http:", "https:"].includes(endpoint.protocol) ||
+          endpoint.username ||
+          endpoint.password ||
+          ["fanclan.io", "vercel.app", "vercel.com"].some(
+            (d) =>
+              endpoint.hostname === d || endpoint.hostname.endsWith("." + d),
+          )
+        )
+          return err(res, 422, "Invalid S3 endpoint");
+      }
+      if (/(^|[.-])(fanclan|vercel)([.-]|$)/i.test(settings.s3Bucket))
+        return err(res, 422, "Invalid S3 bucket");
+      const fd = openMedia(r, r.filePath);
+      const body = createReadStream(r.filePath, { fd, autoClose: true });
       const client = new S3Client({
         region: settings.s3Region,
         endpoint: settings.s3Endpoint || undefined,
@@ -915,19 +1407,56 @@ export function createEngine(options: EngineOptions) {
           secretAccessKey: secrets.s3SecretAccessKey,
         },
       });
-      await new Upload({
+      const upload = new Upload({
         client,
         params: {
           Bucket: settings.s3Bucket,
           Key: `recordings/${r.id}.${r.format}`,
-          Body: createReadStream(r.filePath),
+          Body: body,
         },
-      }).done();
-      update(r, { uploadedToCloud: true });
-      return res.json({ uploadedToCloud: true });
+      });
+      uploads.set(r.id, upload);
+      let finishUpload!: () => void;
+      uploadDone.set(
+        r.id,
+        new Promise<void>((resolve) => {
+          finishUpload = resolve;
+        }),
+      );
+      update(r, { uploadState: "uploading", uploadProgress: 0 });
+      upload.on("httpUploadProgress", (progress) => {
+        if (progress.total)
+          update(r, {
+            uploadProgress: Math.min(
+              100,
+              Math.round(((progress.loaded ?? 0) / progress.total) * 100),
+            ),
+          });
+      });
+      try {
+        await upload.done();
+        update(r, {
+          uploadedToCloud: true,
+          uploadState: "completed",
+          uploadProgress: 100,
+        });
+        return res.json({ uploadedToCloud: true, uploadState: "completed" });
+      } finally {
+        uploads.delete(r.id);
+        finishUpload();
+        uploadDone.delete(r.id);
+        client.destroy();
+      }
     } catch {
+      update(r, { uploadState: "failed" });
       return err(res, 502, "Upload failed");
     }
+  });
+  api.delete("/recordings/:id/upload", async (req, res) => {
+    const upload = uploads.get(String(req.params.id));
+    if (!upload) return err(res, 404, "Upload not active");
+    await upload.abort();
+    return res.json({ uploadState: "cancelled" });
   });
   api.post("/recordings/:id/media-ticket", (req, res) => {
     const r = get("recordings", req.params.id),
@@ -941,29 +1470,108 @@ export function createEngine(options: EngineOptions) {
         : kind === "thumbnail"
           ? r.thumbnailPath
           : r.filePath;
-    if (!file || !existsSync(file)) return err(res, 404, "Media not found");
+    try {
+      const fd = openMedia(r, file);
+      closeSync(fd);
+    } catch {
+      return err(res, 404, "Media not found");
+    }
+    for (const [key, entry] of tickets)
+      if (Date.parse(entry.expiresAt) <= Date.now()) tickets.delete(key);
+    if (tickets.size >= 1000) return err(res, 429, "Too many media tickets");
     const t = token(),
       expiresAt = new Date(Date.now() + 300000).toISOString();
-    tickets.set(hash(t), { file, kind, expiresAt });
+    tickets.set(hash(t), {
+      recordingId: r.id,
+      sessionId: res.locals.session.id,
+      kind,
+      expiresAt,
+    });
     const addr = server.address() as AddressInfo;
     const base =
       mode === "docker"
-        ? `http://${req.headers.host}`
+        ? (publicOrigin ?? `http://${req.headers.host}`)
         : `http://${host.includes(":") ? `[${host}]` : host}:${addr.port}`;
     return res.json({ url: `${base}/media/${t}`, expiresAt });
   });
   app.get("/media/:ticket", (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Content-Type-Options", "nosniff");
     const t = tickets.get(hash(req.params.ticket));
-    if (!t || Date.parse(t.expiresAt) <= Date.now()) {
+    if (
+      !t ||
+      Date.parse(t.expiresAt) <= Date.now() ||
+      !db
+        .prepare("SELECT id FROM sessions WHERE id=? AND expires_at>?")
+        .get(t.sessionId, now())
+    ) {
       tickets.delete(hash(req.params.ticket));
       return err(res, 403, "Ticket expired or invalid");
     }
+    const r = get("recordings", t.recordingId);
+    if (!r) return err(res, 404, "Media not found");
+    const file =
+      t.kind === "preview"
+        ? r.previewPath
+        : t.kind === "thumbnail"
+          ? r.thumbnailPath
+          : r.filePath;
+    const extension = path.extname(file ?? "").toLowerCase();
+    const types: Obj = {
+      ".mp4": "video/mp4",
+      ".mkv": "video/x-matroska",
+      ".ts": "video/mp2t",
+      ".jpg": "image/jpeg",
+    };
+    if (!types[extension]) return err(res, 415, "Unsupported media type");
+    let fd: number;
+    try {
+      fd = openMedia(r, file);
+    } catch {
+      return err(res, 404, "Media not found");
+    }
+    const total = fstatSync(fd).size;
+    let start = 0,
+      end = total - 1;
+    const range = req.headers.range;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (!match || (!match[1] && !match[2])) {
+        closeSync(fd);
+        return res.status(416).end();
+      }
+      if (!match[1]) {
+        const suffix = Number(match[2]);
+        start = Math.max(0, total - suffix);
+      } else start = Number(match[1]);
+      if (match[2] && match[1]) end = Math.min(end, Number(match[2]));
+      if (start > end || start >= total) {
+        closeSync(fd);
+        res.setHeader("Content-Range", `bytes */${total}`);
+        return res.status(416).end();
+      }
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${total}`);
+    }
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Type", types[extension]);
+    res.setHeader("Content-Length", String(Math.max(0, end - start + 1)));
     if (t.kind === "download")
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="recording${path.extname(t.file)}"`,
+        `attachment; filename="recording${extension}"`,
       );
-    return res.sendFile(path.resolve(t.file));
+    mediaResponses.set(res, t.sessionId);
+    res.once("close", () => mediaResponses.delete(res));
+    if (total === 0) {
+      closeSync(fd);
+      return res.end();
+    }
+    const stream = createReadStream(file, { fd, autoClose: true, start, end });
+    stream.on("error", () => res.destroy());
+    stream.pipe(res);
+    return res;
   });
   api.get("/status", (_req, res) => {
     try {
@@ -991,6 +1599,7 @@ export function createEngine(options: EngineOptions) {
   server.on("upgrade", (req, socket, head) => {
     if (
       req.url !== "/api/v1/events" ||
+      !validHost(req.headers.host ?? "") ||
       !safeOrigin(req.headers.origin, req.headers.host)
     ) {
       socket.destroy();
@@ -1001,6 +1610,10 @@ export function createEngine(options: EngineOptions) {
       mode === "desktop" &&
       !/^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(h)
     ) {
+      socket.destroy();
+      return;
+    }
+    if (wss.clients.size >= 100) {
       socket.destroy();
       return;
     }
@@ -1037,14 +1650,15 @@ export function createEngine(options: EngineOptions) {
     if (monitoring || stopping) return;
     monitoring = true;
     try {
-      for (const c of all("channels").filter(
-        (c) => c.enabled && c.autoRecord,
-      )) {
+      for (const c of all("channels").filter((c) => c.enabled)) {
         if (stopping) break;
         try {
           if (
             (await check(c)) &&
             !stopping &&
+            get("channels", c.id)?.enabled === true &&
+            get("channels", c.id)?.autoRecord === true &&
+            get("channels", c.id)?.url === c.url &&
             !all("recordings").some(
               (r) => r.channelId === c.id && activeStates.includes(r.status),
             )
@@ -1061,11 +1675,17 @@ export function createEngine(options: EngineOptions) {
         const cutoff = Date.now() - settings.autoCleanupDays * 86400000;
         for (const r of all("recordings"))
           if (
+            r.managed === true &&
+            !uploads.has(r.id) &&
             !activeStates.includes(r.status) &&
             r.completedAt &&
             Date.parse(r.completedAt) < cutoff
           )
-            safeDelete(r);
+            try {
+              safeDelete(r);
+            } catch {
+              update(r, { error: "Automatic cleanup failed; retry required" });
+            }
       }
     } finally {
       monitoring = false;
@@ -1076,12 +1696,16 @@ export function createEngine(options: EngineOptions) {
         );
     }
   }
-  function importLegacy(file: string) {
+  function importLegacy(file: string, mediaRoot?: string) {
     if (!path.isAbsolute(file))
       throw Error("Absolute legacy database path required");
+    const approvedRoot = mediaRoot ? realpathSync(mediaRoot) : undefined;
     const legacy = new DatabaseSync(file, { readOnly: true });
     let channels = 0,
-      recordings = 0;
+      recordings = 0,
+      unlinkedMedia = 0,
+      skippedChannels = 0,
+      skippedRecordings = 0;
     try {
       const cs = legacy.prepare("SELECT * FROM channels").all() as Obj[],
         rs = legacy.prepare("SELECT * FROM recordings").all() as Obj[];
@@ -1105,7 +1729,9 @@ export function createEngine(options: EngineOptions) {
               updatedAt: now(),
             });
             channels++;
-          } catch {}
+          } catch {
+            skippedChannels++;
+          }
         }
         for (const r of rs) {
           const id = "legacy-" + String(r.id);
@@ -1116,6 +1742,39 @@ export function createEngine(options: EngineOptions) {
               typeof r.file_path === "string" && path.isAbsolute(r.file_path)
                 ? r.file_path
                 : undefined;
+            let safePath: string | undefined;
+            if (
+              filePath &&
+              approvedRoot &&
+              [".mp4", ".mkv", ".ts"].includes(
+                path.extname(filePath).toLowerCase(),
+              )
+            ) {
+              try {
+                const parent = realpathSync(path.dirname(filePath)),
+                  relative = path.relative(approvedRoot, parent);
+                if (
+                  relative !== ".." &&
+                  !relative.startsWith(".." + path.sep) &&
+                  !path.isAbsolute(relative)
+                ) {
+                  const canonical = path.join(parent, path.basename(filePath));
+                  const stat = lstatSync(canonical);
+                  if (stat.isFile() && !stat.isSymbolicLink()) {
+                    let cursor = approvedRoot;
+                    let clean = true;
+                    for (const part of relative
+                      .split(path.sep)
+                      .filter(Boolean)) {
+                      cursor = path.join(cursor, part);
+                      if (lstatSync(cursor).isSymbolicLink()) clean = false;
+                    }
+                    if (clean) safePath = canonical;
+                  }
+                }
+              } catch {}
+            }
+            if (filePath && !safePath) unlinkedMedia++;
             const status =
               r.status === "completed" ? "completed" : "interrupted";
             put("recordings", {
@@ -1128,18 +1787,27 @@ export function createEngine(options: EngineOptions) {
               status,
               quality: qualities.includes(r.quality) ? r.quality : "best",
               format: formats.includes(r.format) ? r.format : "mp4",
-              filePath,
-              fileSize: filePath ? size(filePath) : 0,
+              filePath: safePath,
+              mediaRoot: approvedRoot,
+              fileSize: safePath ? size(safePath) : 0,
               duration: r.duration ?? undefined,
               startedAt: r.started_at ?? now(),
               completedAt: r.completed_at ?? now(),
               uploadedToCloud: !!r.uploaded_to_cloud,
             });
             recordings++;
-          } catch {}
+          } catch {
+            skippedRecordings++;
+          }
         }
         db.exec("COMMIT");
-        return { channels, recordings };
+        return {
+          channels,
+          recordings,
+          unlinkedMedia,
+          skippedChannels,
+          skippedRecordings,
+        };
       } catch (e) {
         db.exec("ROLLBACK");
         throw e;
@@ -1148,10 +1816,54 @@ export function createEngine(options: EngineOptions) {
       legacy.close();
     }
   }
+  const destinationApprovals = new Map<string, Obj>();
+  const approvalRequests = new Map<string, Obj>();
   const local = {
     importLegacy,
+    listUploadApprovals() {
+      return [...approvalRequests.values()]
+        .filter(
+          (item) =>
+            item.status === "pending" &&
+            Date.parse(item.expiresAt) > Date.now(),
+        )
+        .map(({ id, destination, expiresAt }) => ({
+          id,
+          destination,
+          expiresAt,
+        }));
+    },
+    resolveUploadApproval(id: string, approved: boolean) {
+      const item = approvalRequests.get(id);
+      if (
+        !item ||
+        item.status !== "pending" ||
+        Date.parse(item.expiresAt) <= Date.now()
+      )
+        return false;
+      if (!approved) {
+        item.status = "rejected";
+        return true;
+      }
+      const key = token();
+      destinationApprovals.set(key, {
+        destination: JSON.stringify(
+          ["s3Enabled", "s3Bucket", "s3Region", "s3Endpoint"].map(
+            (k) => item.destination[k],
+          ),
+        ),
+        sessionId: item.sessionId,
+        expiresAt: item.expiresAt,
+      });
+      item.approvalToken = key;
+      item.status = "approved";
+      return true;
+    },
     setRecordingsPath(p: string) {
-      if (!path.isAbsolute(p)) throw Error("Absolute path required");
+      if (lockedFields.includes("recordingsPath"))
+        throw Error("Setting is locked");
+      if (!path.isAbsolute(p) || p.startsWith("\\\\"))
+        throw Error("Absolute local path required");
       mkdirSync(p, { recursive: true });
       settings.recordingsPath = p;
       saveSettings();
@@ -1182,12 +1894,15 @@ export function createEngine(options: EngineOptions) {
       started = true;
       healthTimer = setInterval(() => {
         try {
-          const full = disk().usedPercent >= settings.maxDiskUsagePercent;
           for (const [id, p] of processes) {
             const r = get("recordings", id);
             if (r && r.status === "recording") {
-              update(r, { fileSize: size(r.filePath + ".capture.ts") });
-              if (full && !p.stop) void stopRecording(id);
+              update(r, {
+                fileSize: size(r.capturePath ?? r.filePath + ".capture.ts"),
+              });
+              const full =
+                disk(r.mediaRoot).usedPercent >= settings.maxDiskUsagePercent;
+              if (full && !p.stop) void stopRecording(id, "disk pressure");
             }
           }
         } catch {}
@@ -1198,6 +1913,8 @@ export function createEngine(options: EngineOptions) {
     async stop() {
       if (!started) {
         db.close();
+        lease.exec("ROLLBACK");
+        lease.close();
         return;
       }
       stopping = true;
@@ -1205,12 +1922,19 @@ export function createEngine(options: EngineOptions) {
       if (healthTimer) clearInterval(healthTimer);
       while (monitoring)
         await new Promise((resolve) => setTimeout(resolve, 50));
+      const pendingUploads = [...uploadDone.values()];
+      await Promise.allSettled(
+        [...uploads.values()].map((upload) => upload.abort()),
+      );
+      await Promise.allSettled(pendingUploads);
       await Promise.allSettled(
         [...processes.keys()].map((id) => stopRecording(id)),
       );
       for (const ws of wss.clients) ws.terminate();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       db.close();
+      lease.exec("ROLLBACK");
+      lease.close();
       started = false;
     },
   };
