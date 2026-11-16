@@ -1235,3 +1235,162 @@ test("immediate restart waits for crashed engine recorder tree", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("trailing-dot first-party S3 destinations are denied without touching source media", async () => {
+  const fs = await import("node:fs");
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-s3-root-dot-"));
+  const root = fs.realpathSync(dir),
+    media = path.join(root, "source.mp4");
+  fs.writeFileSync(media, "original source");
+  const engine = createEngine({
+    dataDir: path.join(dir, "data"),
+    port: 0,
+    monitor: false,
+  });
+  try {
+    const addr = await engine.start(),
+      base = `http://127.0.0.1:${addr.port}/api/v1`;
+    const post = (url, body, headers = {}) =>
+      fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+    const p = await (await post(base + "/pairings", { name: "test" })).json();
+    engine.auth.approve(p.id);
+    const { token } = await (
+      await fetch(base + "/pairings/" + p.id, {
+        headers: { "X-Pairing-Token": p.pollToken },
+      })
+    ).json();
+    const headers = {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    };
+    for (const endpoint of [
+      "https://streamsnipe-portal.vercel.app.",
+      "https://fanclan.io.",
+      "https://files.fanclan.io.",
+      "https://vercel.com.",
+    ]) {
+      const dest = {
+        s3Enabled: true,
+        s3Bucket: "user-owned",
+        s3Region: "us-east-1",
+        s3Endpoint: endpoint,
+      };
+      assert.equal(
+        (await post(base + "/settings/s3-approvals", dest, headers)).status,
+        422,
+      );
+      assert.equal(
+        (
+          await fetch(base + "/settings", {
+            method: "PUT",
+            headers,
+            body: JSON.stringify(dest),
+          })
+        ).status,
+        422,
+      );
+    }
+    const db = new DatabaseSync(path.join(dir, "data", "engine.sqlite"));
+    const row = {
+      id: "legacy",
+      managed: false,
+      mediaRoot: root,
+      filePath: media,
+      url: "https://www.twitch.tv/test",
+      platform: "twitch",
+      title: "source",
+      status: "completed",
+      quality: "best",
+      format: "mp4",
+      fileSize: 15,
+      startedAt: new Date().toISOString(),
+      uploadedToCloud: false,
+    };
+    db.prepare("INSERT INTO recordings VALUES(?,?)").run(
+      "legacy",
+      JSON.stringify(row),
+    );
+    db.close();
+    assert.equal(fs.readFileSync(media, "utf8"), "original source");
+  } finally {
+    await engine.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("upload rejects persisted trailing-dot endpoints before opening media", async () => {
+  const fs = await import("node:fs");
+  const { DatabaseSync } = await import("node:sqlite");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-persisted-host-")),
+    data = path.join(dir, "data"),
+    source = path.join(dir, "source.mp4");
+  fs.writeFileSync(source, "unchanged");
+  let engine = createEngine({ dataDir: data, port: 0, monitor: false });
+  await engine.stop();
+  const db = new DatabaseSync(path.join(data, "engine.sqlite"));
+  db.prepare("INSERT INTO meta VALUES ('settings',?)").run(
+    JSON.stringify({
+      s3Enabled: true,
+      s3Bucket: "user-owned",
+      s3Region: "us-east-1",
+      s3Endpoint: "https://streamsnipe-portal.vercel.app.",
+    }),
+  );
+  db.prepare("INSERT INTO recordings VALUES (?,?)").run(
+    "r",
+    JSON.stringify({
+      id: "r",
+      managed: false,
+      mediaRoot: fs.realpathSync(dir),
+      filePath: path.join(fs.realpathSync(dir), "missing.mp4"),
+      url: "https://www.twitch.tv/test",
+      platform: "twitch",
+      title: "test",
+      status: "completed",
+      quality: "best",
+      format: "mp4",
+      fileSize: 0,
+      startedAt: new Date().toISOString(),
+      uploadedToCloud: false,
+    }),
+  );
+  db.close();
+  fs.writeFileSync(
+    path.join(data, "secrets.json"),
+    JSON.stringify({ s3AccessKeyId: "test", s3SecretAccessKey: "test" }),
+    { mode: 0o600 },
+  );
+  engine = createEngine({ dataDir: data, port: 0, monitor: false });
+  try {
+    const a = await engine.start(),
+      base = `http://127.0.0.1:${a.port}/api/v1`;
+    const p = await (
+      await fetch(base + "/pairings", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "test" }),
+      })
+    ).json();
+    engine.auth.approve(p.id);
+    const { token } = await (
+      await fetch(base + "/pairings/" + p.id, {
+        headers: { "X-Pairing-Token": p.pollToken },
+      })
+    ).json();
+    const result = await fetch(base + "/recordings/r/upload", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(result.status, 422);
+    assert.equal((await result.json()).error, "Invalid S3 endpoint");
+    assert.equal(fs.readFileSync(source, "utf8"), "unchanged");
+  } finally {
+    await engine.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

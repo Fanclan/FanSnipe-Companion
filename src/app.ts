@@ -76,6 +76,12 @@ const activeStates = [
 ];
 const qualities = ["best", "1080p", "720p", "480p", "360p"];
 const formats = ["mp4", "mkv", "ts"];
+const isForbiddenS3Host = (hostname: string) => {
+  const normalized = hostname.toLowerCase().replace(/\.+$/, "");
+  return ["fanclan.io", "vercel.app", "vercel.com"].some(
+    (domain) => normalized === domain || normalized.endsWith("." + domain),
+  );
+};
 const err = (res: Response, status: number, message: string) =>
   res.status(status).json({ error: message });
 const size = (p: string) => {
@@ -1005,6 +1011,14 @@ export function createEngine(options: EngineOptions) {
       )
     )
       return err(res, 422, "Invalid destination");
+    if (destination.s3Endpoint) {
+      try {
+        if (isForbiddenS3Host(new URL(destination.s3Endpoint).hostname))
+          return err(res, 422, "Invalid S3 endpoint");
+      } catch {
+        return err(res, 422, "Invalid S3 endpoint");
+      }
+    }
     for (const [id, item] of approvalRequests)
       if (Date.parse(item.expiresAt) <= Date.now()) approvalRequests.delete(id);
     if (approvalRequests.size >= 100)
@@ -1101,10 +1115,7 @@ export function createEngine(options: EngineOptions) {
           endpoint.password ||
           endpoint.search ||
           endpoint.hash ||
-          ["fanclan.io", "vercel.app", "vercel.com"].some(
-            (d) =>
-              endpoint.hostname === d || endpoint.hostname.endsWith("." + d),
-          )
+          isForbiddenS3Host(endpoint.hostname)
         )
           return err(res, 422, "Invalid S3 endpoint");
       } catch {
@@ -1420,10 +1431,7 @@ export function createEngine(options: EngineOptions) {
           !["http:", "https:"].includes(endpoint.protocol) ||
           endpoint.username ||
           endpoint.password ||
-          ["fanclan.io", "vercel.app", "vercel.com"].some(
-            (d) =>
-              endpoint.hostname === d || endpoint.hostname.endsWith("." + d),
-          )
+          isForbiddenS3Host(endpoint.hostname)
         )
           return err(res, 422, "Invalid S3 endpoint");
       }
