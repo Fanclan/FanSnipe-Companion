@@ -34,7 +34,9 @@ for (const item of lock.files) {
     const entry = item.windows ? 'deno.exe' : 'deno';
     // Git Bash tar interprets a Windows drive prefix as a remote host. Read the
     // verified ZIP entry directly, without depending on the runner's tar variant.
-    const data = execFileSync('python3', ['-c', 'import sys,zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))', source, entry], {maxBuffer: 250 * 1024 * 1024});
+    const data = process.platform === 'win32'
+      ? execFileSync('python3', ['-c', 'import sys,zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))', source, entry], {maxBuffer: 250 * 1024 * 1024})
+      : execFileSync('unzip', ['-p', source, entry], {maxBuffer: 250 * 1024 * 1024});
     const dest = `tools/${entry}`; const out = path.join(stage,dest); await mkdir(path.dirname(out),{recursive:true}); await writeFile(out,data,{mode:0o755});
     manifest.push({path:dest,sha256:createHash('sha256').update(data).digest('hex')});
   } else await add(source,item.destination,item.sha256);
