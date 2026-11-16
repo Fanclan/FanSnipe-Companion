@@ -1,0 +1,710 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "StreamSnipe local companion API",
+    "version": "1.0.0",
+    "description": "By the team at Fanclan.io. Local-only recording and control API. Pairing and media-ticket details in README.md."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:47821/api/v1"
+    }
+  ],
+  "security": [
+    {
+      "pairedBearer": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "pairedBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/info": {
+      "get": {
+        "operationId": "get_info",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "security": []
+      }
+    },
+    "/pairings": {
+      "post": {
+        "operationId": "post_pairings",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pairings/{id}": {
+      "get": {
+        "operationId": "get_pairings_id",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": []
+      }
+    },
+    "/pairings/{id}/approve": {
+      "post": {
+        "operationId": "post_pairings_id_approve",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions": {
+      "get": {
+        "operationId": "get_sessions",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/sessions/revoke": {
+      "post": {
+        "operationId": "post_sessions_revoke",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{id}": {
+      "delete": {
+        "operationId": "delete_sessions_id",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/channels": {
+      "get": {
+        "operationId": "get_channels",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_channels",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{id}": {
+      "patch": {
+        "operationId": "patch_channels_id",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_channels_id",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/channels/{id}/check": {
+      "post": {
+        "operationId": "post_channels_id_check",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{id}/stats": {
+      "get": {
+        "operationId": "get_channels_id_stats",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/recordings": {
+      "get": {
+        "operationId": "get_recordings",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/recordings/start": {
+      "post": {
+        "operationId": "post_recordings_start",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recordings/{id}": {
+      "get": {
+        "operationId": "get_recordings_id",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "delete_recordings_id",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/recordings/{id}/stop": {
+      "post": {
+        "operationId": "post_recordings_id_stop",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recordings/{id}/media-ticket": {
+      "post": {
+        "operationId": "post_recordings_id_media_ticket",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recordings/{id}/upload": {
+      "post": {
+        "operationId": "post_recordings_id_upload",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "operationId": "get_settings",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      },
+      "put": {
+        "operationId": "put_settings",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "operationId": "get_status",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    },
+    "/diagnostics": {
+      "get": {
+        "operationId": "get_diagnostics",
+        "responses": {
+          "200": {
+            "description": "Success; typed response documented in index.d.ts"
+          },
+          "401": {
+            "description": "Pairing/session required"
+          },
+          "403": {
+            "description": "Origin, setup credential, or scope denied"
+          },
+          "422": {
+            "description": "Invalid input"
+          }
+        }
+      }
+    }
+  }
+}
