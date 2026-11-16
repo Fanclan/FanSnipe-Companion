@@ -6,12 +6,13 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { createEngine } from '../dist/app.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // A real elapsed-time test. Short runs are smoke tests and cannot satisfy the release soak gate.
 const seconds = Number(process.env.SOAK_SECONDS ?? 8 * 60 * 60);
 assert.ok(Number.isFinite(seconds) && seconds >= 10, 'SOAK_SECONDS must be at least 10');
+const mode = process.env.SOAK_ENGINE_MODE ?? 'desktop';
+assert.ok(['desktop', 'docker'].includes(mode), 'SOAK_ENGINE_MODE must be desktop or docker');
 const work = process.env.SOAK_DIRECTORY ?? await mkdtemp(path.join(tmpdir(), 'streamsnipe-soak-'));
 const source = path.join(work, 'source');
 const recordingsPath = path.join(work, 'recordings');
@@ -19,12 +20,19 @@ mkdirSync(source, { recursive: true });
 const ffmpeg = process.env.FFMPEG_PATH ?? 'ffmpeg';
 const ffprobe = process.env.FFPROBE_PATH ?? 'ffprobe';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const enginePath = fileURLToPath(new URL('../dist/app.js', import.meta.url));
+const enginePath = process.env.ENGINE_MODULE_PATH ?? fileURLToPath(new URL('../dist/app.js', import.meta.url));
+assert.ok(path.isAbsolute(enginePath), 'ENGINE_MODULE_PATH must be absolute');
+const { createEngine } = await import(pathToFileURL(enginePath).href);
 const report = {
   kind: seconds >= 28800 ? 'release-soak' : 'smoke',
   startedAt: new Date().toISOString(), platform: process.platform, arch: process.arch,
   node: process.version, plannedSeconds: seconds,
+  distribution: process.env.SOAK_DISTRIBUTION ?? 'source',
+  mode,
   engineSha256: createHash('sha256').update(readFileSync(enginePath)).digest('hex'),
+  toolHashes: Object.fromEntries([['ffmpeg', ffmpeg], ['ffprobe', ffprobe], ['jobRunner', process.env.JOB_RUNNER_PATH]]
+    .filter(([, tool]) => tool && path.isAbsolute(tool) && existsSync(tool))
+    .map(([name, tool]) => [name, createHash('sha256').update(readFileSync(tool)).digest('hex')])),
   status: 'running', samples: [], recordings: [], media: [],
 };
 const reportPath = path.join(work, 'report.json');
@@ -55,7 +63,7 @@ try {
   assert.ok(existsSync(path.join(source,'index.m3u8')), `Source did not start: ${sourceError}`);
   await new Promise(resolve => sourceServer.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${sourceServer.address().port}`;
-  engine = createEngine({dataDir:path.join(work,'data'),recordingsPath,port:0,monitor:false,
+  engine = createEngine({mode,dataDir:path.join(work,'data'),recordingsPath,port:0,monitor:false,
     ffmpegPath:ffmpeg,ffprobePath:ffprobe,jobRunnerPath:process.env.JOB_RUNNER_PATH,fixtureOrigins:[origin]});
   const address = await engine.start();
   const base = `http://127.0.0.1:${address.port}/api/v1`;

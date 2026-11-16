@@ -128,6 +128,42 @@ jobs:
       - name: Build desktop candidate
         working-directory: desktop
         run: npm run pack -- ${{ matrix.flags }}
+      - name: Smoke-test macOS app outside the checkout
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          isolated="$RUNNER_TEMP/streamsnipe-clean"
+          mkdir -p "$isolated/data"
+          ditto "artifacts/mac${{ matrix.target == 'darwin-arm64' && '-arm64' || '' }}/StreamSnipe.app" "$isolated/StreamSnipe.app"
+          resources="$isolated/StreamSnipe.app/Contents/Resources"
+          env -u NODE_PATH ELECTRON_RUN_AS_NODE=1 SOAK_DISTRIBUTION=packaged SOAK_SECONDS=30 SOAK_DIRECTORY="$isolated/data" \
+            ENGINE_MODULE_PATH="$resources/engine/dist/app.js" FFMPEG_PATH="$resources/tools/ffmpeg" FFPROBE_PATH="$resources/tools/ffprobe" \
+            "$isolated/StreamSnipe.app/Contents/MacOS/StreamSnipe" "$PWD/integration/soak.mjs"
+      - name: Build and smoke-test Windows QA bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $qa = Join-Path $PWD 'build/windows-qa'
+          New-Item -ItemType Directory -Force $qa | Out-Null
+          Copy-Item -Recurse 'artifacts/win-unpacked' (Join-Path $qa 'app')
+          Copy-Item 'integration/soak.mjs' (Join-Path $qa 'soak.mjs')
+          Copy-Item 'desktop/qa/Run-Windows-Soak.ps1' $qa
+          Copy-Item 'desktop/qa/README.txt' $qa
+          $isolated = Join-Path $env:RUNNER_TEMP 'streamsnipe-clean-qa'
+          Copy-Item -Recurse $qa $isolated
+          & (Join-Path $isolated 'Run-Windows-Soak.ps1') -Smoke -OutputRoot (Join-Path $env:RUNNER_TEMP 'streamsnipe-qa-smoke')
+          Compress-Archive -Path (Join-Path $qa '*') -DestinationPath 'artifacts/StreamSnipe-Windows-QA.zip'
+          $hash = (Get-FileHash -Algorithm SHA256 'artifacts/StreamSnipe-Windows-QA.zip').Hash.ToLowerInvariant()
+          "$hash  StreamSnipe-Windows-QA.zip" | Set-Content -Encoding ascii 'artifacts/StreamSnipe-Windows-QA.zip.sha256'
+      - name: Upload Windows QA build artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-qa-${{ github.sha }}
+          path: |
+            artifacts/StreamSnipe-Windows-QA.zip
+            artifacts/StreamSnipe-Windows-QA.zip.sha256
+          if-no-files-found: error
       - name: Verify macOS signature and notarization
         if: ${{ runner.os == 'macOS' && github.event_name != 'workflow_dispatch' && !contains(github.ref_name, '-beta') }}
         shell: bash
@@ -154,7 +190,7 @@ jobs:
           name: streamsnipe-${{ matrix.target }}
           path: |
             artifacts/*.dmg
-            artifacts/*.zip
+            artifacts/*-mac.zip
             artifacts/*.exe
             artifacts/*.tar.xz
             artifacts/*.sh

@@ -50,4 +50,6 @@ await mkdir(path.join(stage,'engine'),{recursive:true});
 await cp(path.join(root,'dist'),path.join(stage,'engine/dist'),{recursive:true});
 await cp(path.join(root,'node_modules'),path.join(stage,'engine/node_modules'),{recursive:true});
 await cp(path.join(root,'package.json'),path.join(stage,'engine/package.json'));
+await cp(path.join(root,'package-lock.json'),path.join(stage,'engine/package-lock.json'));
+execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['prune','--omit=dev','--ignore-scripts','--offline','--no-audit','--no-fund'], {cwd:path.join(stage,'engine'),stdio:'inherit',shell:process.platform === 'win32'});
 await writeFile(path.join(stage,'integrity.json'),JSON.stringify({protocolVersion:1,files:manifest.sort((a,b)=>a.path.localeCompare(b.path))},null,2)+'\n');
