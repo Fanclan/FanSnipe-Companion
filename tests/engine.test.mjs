@@ -534,7 +534,7 @@ test("stop waits for capture exit and validated finalization", async () => {
   const fake = path.join(dir, "recorder.cjs");
   fs.writeFileSync(
     fake,
-    'const {spawn}=require("node:child_process");const a=process.argv;const out=a[a.indexOf("-o")+1];const p=spawn("ffmpeg",["-y","-v","error","-re","-f","lavfi","-i","testsrc=size=160x90:rate=10","-c:v","mpeg2video","-f","mpegts",out],{stdio:"ignore"});p.on("close",c=>process.exit(c??1));',
+    'const {spawn}=require("node:child_process");const a=process.argv;const out=a[a.indexOf("-o")+1];const p=spawn("ffmpeg",["-y","-v","error","-re","-f","lavfi","-i","testsrc=size=160x90:rate=10","-c:v","mpeg2video","-flush_packets","1","-f","mpegts",out],{stdio:"ignore"});p.on("close",c=>process.exit(c??1));',
     { mode: 0o755 },
   );
   const engine = createEngine({
@@ -569,15 +569,31 @@ test("stop waits for capture exit and validated finalization", async () => {
         headers,
       )
     ).json();
-    await new Promise((resolve) => setTimeout(resolve, 1800));
+    const capture = path.join(
+      dir,
+      "data",
+      "recordings",
+      `${r.id}.mkv.capture.ts`,
+    );
+    let written = false;
+    for (let i = 0; i < 200; i++) {
+      try {
+        if (fs.statSync(capture).size > 0) {
+          written = true;
+          break;
+        }
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(
+      written,
+      true,
+      "synthetic capture produced data before stopping",
+    );
     const stopped = await (
       await post(base + "/recordings/" + r.id + "/stop", {}, headers)
     ).json();
-    assert.equal(
-      stopped.status,
-      process.platform === "win32" ? "interrupted" : "completed",
-      JSON.stringify(stopped),
-    );
+    assert.equal(stopped.status, "completed", JSON.stringify(stopped));
     assert.ok(stopped.fileSize > 0);
     assert.ok(stopped.duration > 0);
     assert.equal(
@@ -1050,3 +1066,63 @@ test("Docker setup token approves only the initiating session destination", asyn
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test(
+  "Windows JobRunner waits for all job descendants after user stop",
+  { skip: process.platform === "win32" ? false : "Windows Job Object test" },
+  async () => {
+    const { spawn } = await import("node:child_process");
+    const fs = await import("node:fs");
+    const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-jobrunner-"));
+    const pidFile = path.join(dir, "descendant.pid");
+    const childFile = path.join(dir, "child.cjs"),
+      parentFile = path.join(dir, "parent.cjs");
+    fs.writeFileSync(
+      childFile,
+      `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000);`,
+    );
+    fs.writeFileSync(
+      parentFile,
+      `require('child_process').spawn(process.execPath,[${JSON.stringify(childFile)}],{stdio:'ignore'});setInterval(()=>{},1000);`,
+    );
+    assert.ok(
+      process.env.JOB_RUNNER_PATH,
+      "Windows CI must provide JOB_RUNNER_PATH",
+    );
+    const helper = spawn(
+      process.env.JOB_RUNNER_PATH,
+      [String(process.pid), process.execPath, parentFile],
+      { stdio: ["pipe", "ignore", "pipe"] },
+    );
+    let pid;
+    try {
+      for (let i = 0; i < 100 && !pid; i++) {
+        try {
+          pid = Number(fs.readFileSync(pidFile, "utf8"));
+        } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.ok(pid, "job descendant started");
+      helper.stdin.write("stop\n");
+      const code = await new Promise((resolve) =>
+        helper.once("close", resolve),
+      );
+      assert.equal(
+        code,
+        0,
+        "helper reports an intentional stop after the job is empty",
+      );
+      assert.throws(
+        () => process.kill(pid, 0),
+        "job descendant has exited before helper returns",
+      );
+    } finally {
+      if (helper.exitCode === null) helper.kill();
+      if (pid)
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);

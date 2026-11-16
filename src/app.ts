@@ -885,7 +885,9 @@ export function createEngine(options: EngineOptions) {
         } else if (r.status !== "failed")
           await finish(
             r,
-            (code === 0 || entry.stop) && !entry.forced && !entry.reason,
+            (code === 0 || (process.platform !== "win32" && entry.stop)) &&
+              !entry.forced &&
+              !entry.reason,
           );
       } finally {
         processes.delete(id);
@@ -917,7 +919,6 @@ export function createEngine(options: EngineOptions) {
       };
       if (p.child.stdin?.writable) {
         p.child.stdin.write("stop\n");
-        if (process.platform === "win32") p.forced = true;
       } else signal("SIGINT");
       const timer = setTimeout(() => {
         p.forced = true;
