@@ -3,6 +3,8 @@ services:
     image: ghcr.io/fanclan/streamsnipe:${STREAMSNIPE_VERSION:?Set STREAMSNIPE_VERSION to a verified published release tag}
     ports:
       - "${STREAMSNIPE_BIND:-127.0.0.1}:47821:47821"
+    environment:
+      PUBLIC_ORIGIN: "${STREAMSNIPE_PUBLIC_ORIGIN:-}"
     volumes:
       - streamsnipe-data:/data
       - streamsnipe-media:/media

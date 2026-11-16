@@ -8,6 +8,8 @@ StreamSnipe pairs a web dashboard with a recording engine on your own computer. 
 
 Maintained by [zerodayprime](https://github.com/zerodayprime) in the [Fanclan organization](https://github.com/Fanclan). The website and shared dashboard live in [StreamSnipe Portal](https://github.com/Fanclan/StreamSnipe-Portal).
 
+Visit the [website and web dashboard](https://streamsnipe-portal.vercel.app/) or read the [setup guide](https://streamsnipe-portal.vercel.app/docs/).
+
 ## Where recordings go
 
 ```text

@@ -25,8 +25,8 @@ case "$TARGET" in
   *) echo "Unsupported FFmpeg target: $TARGET" >&2; exit 1;;
 esac
 ./configure --disable-autodetect --disable-x86asm --disable-doc --disable-debug --disable-ffplay --disable-shared --enable-static "${TLS[@]}" ${EXTRA[@]+"${EXTRA[@]}"}
-make -j "${FFMPEG_BUILD_JOBS:-4}" ffmpeg ffprobe
 EXT=''; [ "$TARGET" != win32-x64 ] || EXT=.exe
+make -j "${FFMPEG_BUILD_JOBS:-4}" "ffmpeg$EXT" "ffprobe$EXT"
 cp "ffmpeg$EXT" "ffprobe$EXT" "$OUT/"
 cp COPYING.LGPLv2.1 "$OUT/LICENSE.LGPLv2.1"
 cp "$ARCHIVE" "$OUT/ffmpeg-source.tar.xz"

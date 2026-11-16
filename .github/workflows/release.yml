@@ -46,8 +46,7 @@ jobs:
           test -n "$DASHBOARD_URL"
           curl --fail --location --proto '=https' "$DASHBOARD_URL" -o dashboard.tar.gz
           node -e "const fs=require('fs'),c=require('crypto'),lock=require('./scripts/packaging-dashboard.json');if(c.createHash('sha256').update(fs.readFileSync('dashboard.tar.gz')).digest('hex')!==lock.archiveSha256)process.exit(1)"
-          mkdir dashboard-input
-          python3 -c "import tarfile; t=tarfile.open('dashboard.tar.gz'); t.extractall('dashboard-input',filter='data')"
+          python3 scripts/packaging-dashboard-extract.py dashboard.tar.gz dashboard-input scripts/packaging-dashboard.json
       - name: Set up Windows native toolchain
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
@@ -177,8 +176,7 @@ jobs:
           test -n "$DASHBOARD_URL"
           curl --fail --location --proto '=https' "$DASHBOARD_URL" -o dashboard.tar.gz
           test "$(sha256sum dashboard.tar.gz | cut -d' ' -f1)" = "$(python3 -c 'import json; print(json.load(open("scripts/packaging-dashboard.json"))["archiveSha256"])')"
-          mkdir -p staging/dashboard
-          python3 -c "import tarfile; t=tarfile.open('dashboard.tar.gz'); t.extractall('staging/dashboard',filter='data')"
+          python3 scripts/packaging-dashboard-extract.py dashboard.tar.gz staging/dashboard scripts/packaging-dashboard.json
       - name: Smoke test amd64 image before publishing
         run: |
           docker buildx build --platform linux/amd64 --load -t streamsnipe:smoke .
