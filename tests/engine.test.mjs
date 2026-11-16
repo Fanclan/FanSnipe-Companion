@@ -475,7 +475,6 @@ test("remux failure preserves the partial capture and reports interruption", asy
     jobRunnerPath: process.env.JOB_RUNNER_PATH,
     ffmpegPath: process.execPath,
     testFfmpegPrefixArgs: [wrapper],
-    jobRunnerPath: process.env.JOB_RUNNER_PATH,
   });
   try {
     const a = await engine.start(),
@@ -855,6 +854,31 @@ test("finalization crash prefers preserved capture over an unvalidated output", 
       uploadedToCloud: false,
     }),
   );
+  const published = path.join(root, "published.mp4"),
+    publishedCapture = published + ".capture.ts";
+  fs.writeFileSync(published, "validated output");
+  fs.writeFileSync(publishedCapture, "old capture");
+  db.prepare("INSERT INTO recordings VALUES (?,?)").run(
+    "published",
+    JSON.stringify({
+      id: "published",
+      managed: true,
+      mediaRoot: root,
+      filePath: published,
+      outputPath: published,
+      publishedPath: published,
+      capturePath: publishedCapture,
+      status: "finalizing",
+      url: "https://www.twitch.tv/example",
+      platform: "twitch",
+      title: "published",
+      quality: "best",
+      format: "mp4",
+      fileSize: 16,
+      startedAt: new Date().toISOString(),
+      uploadedToCloud: false,
+    }),
+  );
   db.close();
   engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   await engine.stop();
@@ -867,6 +891,12 @@ test("finalization crash prefers preserved capture over an unvalidated output", 
   assert.equal(row.status, "interrupted");
   assert.equal(row.filePath, capture);
   assert.equal(fs.readFileSync(capture, "utf8"), "valid capture");
+  const publishedRow = JSON.parse(
+    check.prepare("SELECT data FROM recordings WHERE id=?").get("published")
+      .data,
+  );
+  assert.equal(publishedRow.filePath, published);
+  assert.equal(publishedRow.capturePath, publishedCapture);
   check.close();
   await rm(dir, { recursive: true, force: true });
 });
@@ -1089,9 +1119,14 @@ test(
       process.env.JOB_RUNNER_PATH,
       "Windows CI must provide JOB_RUNNER_PATH",
     );
+    const { DatabaseSync } = await import("node:sqlite");
+    const gatePath = path.join(dir, "gate.sqlite");
+    const gate = new DatabaseSync(gatePath);
+    gate.exec("CREATE TABLE gate(id INTEGER)");
+    gate.close();
     const helper = spawn(
       process.env.JOB_RUNNER_PATH,
-      [String(process.pid), process.execPath, parentFile],
+      [String(process.pid), gatePath, process.execPath, parentFile],
       { stdio: ["pipe", "ignore", "pipe"] },
     );
     let pid;
@@ -1126,3 +1161,77 @@ test(
     }
   },
 );
+
+test("immediate restart waits for crashed engine recorder tree", async () => {
+  const { spawn } = await import("node:child_process");
+  const fs = await import("node:fs");
+  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-restart-lease-"));
+  const data = path.join(dir, "data"),
+    pidFile = path.join(dir, "writer.pid"),
+    recorder = path.join(dir, "recorder.cjs");
+  fs.writeFileSync(
+    recorder,
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000);`,
+  );
+  const url = new URL("../dist/app.js", import.meta.url).href;
+  const code = `import {createEngine} from ${JSON.stringify(url)};const e=createEngine({dataDir:process.argv[1],port:0,monitor:false,ytDlpPath:process.execPath,testYtDlpPrefixArgs:[process.argv[2]],jobRunnerPath:process.env.JOB_RUNNER_PATH});const a=await e.start(),b='http://127.0.0.1:'+a.port+'/api/v1';const p=await(await fetch(b+'/pairings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:'restart'})})).json();e.auth.approve(p.id);const t=(await(await fetch(b+'/pairings/'+p.id,{headers:{'X-Pairing-Token':p.pollToken}})).json()).token;await fetch(b+'/recordings/start',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+t},body:JSON.stringify({url:'https://www.twitch.tv/test'})});setInterval(()=>{},1000)`;
+  const parent = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", code, data, recorder],
+    { stdio: "ignore", env: process.env },
+  );
+  let pid;
+  try {
+    for (let i = 0; i < 120 && !pid; i++) {
+      try {
+        pid = Number(fs.readFileSync(pidFile, "utf8"));
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(pid, "recorder started");
+    parent.kill("SIGKILL");
+    await new Promise((resolve) => parent.once("close", resolve));
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+    }
+    let next;
+    if (alive) {
+      try {
+        next = createEngine({ dataDir: data, port: 0, monitor: false });
+      } catch (error) {
+        assert.match(String(error.message), /in use|still exiting/);
+      }
+      if (next) {
+        let stillAlive = true;
+        try {
+          process.kill(pid, 0);
+        } catch {
+          stillAlive = false;
+        }
+        assert.equal(
+          stillAlive,
+          false,
+          "startup must not recover while recorder remains alive",
+        );
+      }
+    }
+    for (let i = 0; i < 200 && !next; i++) {
+      try {
+        next = createEngine({ dataDir: data, port: 0, monitor: false });
+      } catch {}
+      if (!next) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(next, "restart succeeds after recorder exits");
+    await next.stop();
+  } finally {
+    if (parent.exitCode === null) parent.kill("SIGKILL");
+    if (pid)
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    await rm(dir, { recursive: true, force: true });
+  }
+});

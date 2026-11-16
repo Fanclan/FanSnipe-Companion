@@ -98,7 +98,9 @@ const run = (bin: string, args: string[], timeout = 30000) =>
     let force: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       if (p.stdin?.writable) p.stdin.write("stop\n");
-      force = setTimeout(() => p.kill("SIGKILL"), 8000);
+      force = setTimeout(() => {
+        if (p.stdin?.writable) p.stdin.write("stop\n");
+      }, 8000);
     }, timeout);
     p.once("error", (e) => {
       clearTimeout(timer);
@@ -131,6 +133,18 @@ export function createEngine(options: EngineOptions) {
     lease.close();
     throw new Error("Recording catalog is already in use");
   }
+  const workerLeasePath = path.join(canonicalDataDir, ".worker-lease.sqlite");
+  const workerGate = new DatabaseSync(workerLeasePath);
+  try {
+    workerGate.exec(
+      "PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS gate(id INTEGER); BEGIN EXCLUSIVE",
+    );
+  } catch {
+    workerGate.close();
+    lease.exec("ROLLBACK");
+    lease.close();
+    throw new Error("Prior recorder processes are still exiting");
+  }
   const db = new DatabaseSync(path.join(canonicalDataDir, "engine.sqlite"));
   const version = Number(
     (db.prepare("PRAGMA user_version").get() as Obj).user_version,
@@ -142,6 +156,8 @@ export function createEngine(options: EngineOptions) {
     .all() as Obj[];
   if (version > 1 || (version === 0 && existingTables.length > 0)) {
     db.close();
+    workerGate.exec("ROLLBACK");
+    workerGate.close();
     lease.exec("ROLLBACK");
     lease.close();
     throw new Error("Unsupported catalog version; catalog was not modified");
@@ -500,6 +516,8 @@ export function createEngine(options: EngineOptions) {
       managed,
       capturePath,
       stagingPath,
+      outputPath,
+      publishedPath,
       ...rest
     } = r;
     return {
@@ -524,7 +542,7 @@ export function createEngine(options: EngineOptions) {
         );
       return run(
         options.jobRunnerPath,
-        [String(process.pid), bin, ...args],
+        [String(process.pid), workerLeasePath, bin, ...args],
         timeout,
       );
     }
@@ -532,6 +550,8 @@ export function createEngine(options: EngineOptions) {
       process.execPath,
       [
         fileURLToPath(new URL("./supervisor.js", import.meta.url)),
+        String(process.pid),
+        workerLeasePath,
         bin,
         ...args,
       ],
@@ -582,6 +602,7 @@ export function createEngine(options: EngineOptions) {
       status: "finalizing",
       capturePath: capture,
       stagingPath: staging,
+      outputPath: output,
     });
     if (!existsSync(capture) || !size(capture)) {
       update(r, {
@@ -646,6 +667,7 @@ export function createEngine(options: EngineOptions) {
       renameSync(staging, output);
       update(r, {
         filePath: output,
+        publishedPath: output,
         stagingPath: undefined,
         fileSize: size(output),
         duration,
@@ -829,6 +851,7 @@ export function createEngine(options: EngineOptions) {
       process.platform === "win32"
         ? [
             String(process.pid),
+            workerLeasePath,
             recorder,
             ...(fixture(u)
               ? (options.testFfmpegPrefixArgs ?? [])
@@ -837,6 +860,8 @@ export function createEngine(options: EngineOptions) {
           ]
         : [
             fileURLToPath(new URL("./supervisor.js", import.meta.url)),
+            String(process.pid),
+            workerLeasePath,
             recorder,
             ...(fixture(u)
               ? (options.testFfmpegPrefixArgs ?? [])
@@ -926,8 +951,8 @@ export function createEngine(options: EngineOptions) {
       }, 5000);
       const force = setTimeout(() => {
         p.forced = true;
-        signal("SIGKILL");
-        if (process.platform === "win32") p.child.kill();
+        signal("SIGTERM");
+        // Keep the supervisor alive and its catalog reader lease held until the tree exits.
       }, 12000);
       await p.done;
       clearTimeout(timer);
@@ -952,7 +977,10 @@ export function createEngine(options: EngineOptions) {
       r.error = "Engine restarted during recording";
       r.completedAt = now();
       const capture = r.capturePath ?? r.filePath + ".capture.ts";
-      if (existsSync(capture)) {
+      if (r.publishedPath && existsSync(r.publishedPath)) {
+        r.filePath = r.publishedPath;
+        r.fileSize = size(r.publishedPath);
+      } else if (existsSync(capture)) {
         r.capturePath = capture;
         r.filePath = capture;
         r.fileSize = size(capture);
@@ -960,6 +988,8 @@ export function createEngine(options: EngineOptions) {
       put("recordings", r);
     }
   }
+  workerGate.exec("COMMIT");
+  workerGate.close();
   api.use(requireAuth);
   api.post("/settings/s3-approvals", (req, res) => {
     const destination = Object.fromEntries(
@@ -1342,6 +1372,8 @@ export function createEngine(options: EngineOptions) {
       r.filePath,
       r.capturePath,
       r.stagingPath,
+      r.outputPath,
+      r.publishedPath,
       r.previewPath,
       r.thumbnailPath,
     ];
