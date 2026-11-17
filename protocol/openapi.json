@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FanSnipe local companion API",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "description": "By the team at Fanclan.io. Local-only recording and control API. Pairing and media-ticket details in README.md."
   },
   "servers": [
@@ -772,6 +772,266 @@
           },
           "403": {
             "description": "Authorization or operator approval required"
+          }
+        }
+      }
+    },
+    "/studio/unlock": {
+      "post": {
+        "operationId": "unlockStudio",
+        "summary": "Unlock the local Docker studio using its owner-configured password",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "writeOnly": true
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Browser label"
+                  }
+                },
+                "required": [
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string",
+                      "description": "Revocable session credential"
+                    }
+                  },
+                  "required": [
+                    "token"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Incorrect password"
+          },
+          "403": {
+            "description": "Origin denied"
+          },
+          "409": {
+            "description": "Configure studio password"
+          },
+          "429": {
+            "description": "Try again later"
+          }
+        },
+        "security": []
+      }
+    },
+    "/sources/inspect": {
+      "post": {
+        "operationId": "inspectSource",
+        "summary": "Inspect a supported stream without starting playback or saving media",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Stream page URL"
+                  }
+                },
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "platform": {
+                      "type": "string",
+                      "description": "Platform identifier"
+                    },
+                    "status": {
+                      "enum": [
+                        "live",
+                        "available",
+                        "offline",
+                        "unknown",
+                        "restricted",
+                        "unsupported"
+                      ]
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "Broadcast title"
+                    },
+                    "creator": {
+                      "type": "string",
+                      "description": "Channel or creator"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "User-readable status"
+                    }
+                  },
+                  "required": [
+                    "platform",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Browser session required"
+          },
+          "422": {
+            "description": "Invalid input"
+          },
+          "429": {
+            "description": "Too many source checks"
+          }
+        }
+      }
+    },
+    "/previews": {
+      "post": {
+        "operationId": "startPreview",
+        "summary": "Open local live playback",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Stream page URL"
+                  },
+                  "recordingId": {
+                    "type": "string",
+                    "description": "Active recording"
+                  },
+                  "previewId": {
+                    "type": "string",
+                    "description": "Renew an existing viewer ticket"
+                  }
+                },
+                "required": [],
+                "oneOf": [
+                  {
+                    "required": [
+                      "url"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "recordingId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "previewId"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "401": {
+            "description": "Browser session required"
+          },
+          "409": {
+            "description": "Source state changed"
+          },
+          "422": {
+            "description": "Preview unavailable"
+          },
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "Preview handle"
+                    },
+                    "url": {
+                      "type": "string",
+                      "description": "Local playlist URL"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "url",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/previews/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "closePreview",
+        "summary": "Close this viewing session without stopping its recording",
+        "responses": {
+          "200": {
+            "description": "Preview closed"
+          },
+          "204": {
+            "description": "Preview closed"
+          },
+          "401": {
+            "description": "Browser session required"
+          },
+          "404": {
+            "description": "Preview unavailable"
           }
         }
       }
