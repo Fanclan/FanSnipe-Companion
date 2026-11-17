@@ -10,7 +10,7 @@ test("recorder distinguishes offline and denied streams without storing download
   const fake = path.join(dir, "recorder.cjs");
   await writeFile(
     fake,
-    `const source = process.argv.at(-1); const message = source.endsWith('/offline') ? 'Room is currently offline' : 'HTTP Error 403: Forbidden'; process.stderr.write('ERROR: [Chaturbate] secret-fixture-room: ');setTimeout(() => {process.stderr.write(message+' signedURL=private-test-value\\n');process.exitCode=1;}, 30);`,
+    `const source = process.argv.at(-1); const message = source.endsWith('/offline') ? 'Room is currently offline' : source.endsWith('/private') ? 'This video is private' : 'HTTP Error 403: Forbidden'; process.stderr.write('ERROR: [Chaturbate] secret-fixture-room: ');setTimeout(() => {process.stderr.write(message+' signedURL=private-test-value\\n');process.exitCode=1;}, 30);`,
   );
   const engine = createEngine({
     dataDir: dir,
@@ -42,6 +42,7 @@ test("recorder distinguishes offline and denied streams without storing download
     for (const [slug, expected] of [
       ["offline", /channel is offline/i],
       ["denied", /site denied access/i],
+      ["private", /site denied access/i],
     ]) {
       const response = await post(
         "/recordings/start",

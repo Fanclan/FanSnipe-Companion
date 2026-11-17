@@ -13,7 +13,7 @@ function describe(line: string): string | undefined {
   )
     return offline;
   if (
-    /private show|private (?:video|stream)|password.protected|hidden session|members.only|subscribers?.only|login required|sign in to (?:view|watch|confirm)|geo.restricted|not available in your country|HTTP Error (?:401|403|451)\b|403 Forbidden|DRM.protected/i.test(
+    /private show|private (?:video|stream)|(?:video|stream) is private|password.protected|hidden session|members.only|subscribers?.only|login required|sign in to (?:view|watch|confirm)|geo.restricted|not available in your country|HTTP Error (?:401|403|451)\b|403 Forbidden|DRM.protected/i.test(
       line,
     )
   )
