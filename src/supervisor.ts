@@ -17,7 +17,7 @@ try {
 }
 const child = spawn(program, args, {
   detached: true,
-  stdio: ["ignore", "inherit", "ignore"],
+  stdio: ["ignore", "inherit", "inherit"],
 });
 let group = child.pid,
   stopping = false,
@@ -40,6 +40,7 @@ process.stdin.on("end", () => stop("SIGTERM"));
 for (const sig of ["SIGINT", "SIGTERM"] as const)
   process.on(sig, () => stop(sig));
 child.once("error", () => {
+  process.stderr.write("FanSnipe: recorder executable unavailable\n");
   if (!completed) {
     completed = true;
     lease.close();

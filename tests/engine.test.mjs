@@ -572,7 +572,7 @@ test("stop waits for capture exit and validated finalization", async () => {
       dir,
       "data",
       "recordings",
-      `${r.id}.mkv.capture.ts`,
+      `${r.id}.mkv.capture.mkv`,
     );
     let written = false;
     for (let i = 0; i < 200; i++) {

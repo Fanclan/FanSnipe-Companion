@@ -17,7 +17,7 @@ RUN npm run build && npm prune --omit=dev && \
     node scripts/packaging-stage.mjs /tmp/inputs.json
 
 FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgnutls30 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgnutls30 tini && rm -rf /var/lib/apt/lists/*
 ENV FANSNIPE_MODE=docker NODE_ENV=production PORT=47821 HOST=0.0.0.0 DASHBOARD_PATH=/opt/fansnipe/dashboard DATA_DIR=/data RECORDINGS_PATH=/media
 WORKDIR /opt/fansnipe
 COPY --from=build --chown=node:node /app/dist ./dist
@@ -33,4 +33,5 @@ RUN mkdir -p /data /media && chown node:node /data /media
 USER node
 VOLUME ["/data", "/media"]
 EXPOSE 47821
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]

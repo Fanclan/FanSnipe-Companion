@@ -56,7 +56,11 @@ jobs:
         run: |
           digest=$(node -p "require('./image-metadata.json')['containerimage.digest']")
           docker pull "ghcr.io/fanclan/fansnipe@$digest"
-          node scripts/packaging-docker-smoke.mjs "ghcr.io/fanclan/fansnipe@$digest"
+          image="ghcr.io/fanclan/fansnipe@$digest"
+          node scripts/packaging-docker-smoke.mjs "$image"
+          docker run --rm --network none -e ENGINE_MODULE_PATH=/opt/fansnipe/dist/app.js -v "$PWD/integration/extractor-capture.mjs:/qa.mjs:ro" "$image" node /qa.mjs
+          docker run --rm --network none --add-host chaturbate.com:127.0.0.1 -v "$PWD/integration/site-recording.mjs:/qa.mjs:ro" "$image" node /qa.mjs
+          docker run --rm --network none --add-host usher.ttvnw.net:127.0.0.1 --add-host edge-hls.fixture.invalid:127.0.0.1 -v "$PWD/integration/platform-extractors.mjs:/qa.mjs:ro" "$image" node /qa.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: docker-digest-${{ matrix.arch }}

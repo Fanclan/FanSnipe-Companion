@@ -31,7 +31,7 @@ Recordings, thumbnails, previews, recording history, and storage credentials sta
 - Optional direct backups to an S3-compatible bucket you control.
 - Desktop tray controls and an all-in-one self-hosted Docker distribution.
 
-The recording engine uses yt-dlp and FFmpeg. Individual platform compatibility can change; release notes distinguish verified integrations from unverified ones. A platform URL being publicly accessible does not by itself grant permission to record its content.
+The recording engine uses yt-dlp and FFmpeg. It accepts Twitch, YouTube, Kick and Chaturbate links, plus Picarto, Stripchat and BongaCams channel pages. Use streams you own or have permission to record where the platform permits recording. FanSnipe combines separate audio and video tracks locally when the site provides them. Individual platform compatibility can change; release notes distinguish verified integrations from unverified ones. A platform URL being publicly accessible does not by itself grant permission to record its content.
 
 ## Downloads and setup
 
