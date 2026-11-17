@@ -1,3 +1,4 @@
+import { platformForUrl as platform, validateStreamUrl } from "./platforms.js";
 import express, {
   type Request,
   type Response,
@@ -36,7 +37,13 @@ import type { AddressInfo } from "node:net";
 import { WebSocketServer, WebSocket } from "ws";
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import {
+  isOfflineError,
+  readRecorderError,
+  unknownSourceError,
+} from "./recorder-errors.js";
 
+const engineVersion = "0.1.3";
 type Obj = Record<string, any>;
 export interface EngineOptions {
   dataDir: string;
@@ -60,6 +67,7 @@ export interface EngineOptions {
   testFfmpegPrefixArgs?: string[];
   testYtDlpPrefixArgs?: string[];
 }
+class SourceCheckError extends Error {}
 const now = () => new Date().toISOString();
 const token = () => randomBytes(32).toString("base64url");
 const hash = (v: string) => createHash("sha256").update(v).digest("hex");
@@ -93,33 +101,36 @@ const size = (p: string) => {
   }
 };
 const run = (bin: string, args: string[], timeout = 30000) =>
-  new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
-    const p = spawn(bin, args, {
-      stdio: ["pipe", "pipe", "ignore"],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-    });
-    let out = "";
-    p.stdout?.on("data", (b) => {
-      if (out.length < 1_000_000) out += b;
-    });
-    let force: NodeJS.Timeout | undefined;
-    const timer = setTimeout(() => {
-      if (p.stdin?.writable) p.stdin.write("stop\n");
-      force = setTimeout(() => {
+  new Promise<{ code: number | null; stdout: string; sourceError?: string }>(
+    (resolve, reject) => {
+      const p = spawn(bin, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      });
+      const sourceError = readRecorderError(p.stderr);
+      let out = "";
+      p.stdout?.on("data", (b) => {
+        if (out.length < 1_000_000) out += b;
+      });
+      let force: NodeJS.Timeout | undefined;
+      const timer = setTimeout(() => {
         if (p.stdin?.writable) p.stdin.write("stop\n");
-      }, 8000);
-    }, timeout);
-    p.once("error", (e) => {
-      clearTimeout(timer);
-      if (force) clearTimeout(force);
-      reject(e);
-    });
-    p.once("close", (code) => {
-      clearTimeout(timer);
-      if (force) clearTimeout(force);
-      resolve({ code, stdout: out });
-    });
-  });
+        force = setTimeout(() => {
+          if (p.stdin?.writable) p.stdin.write("stop\n");
+        }, 8000);
+      }, timeout);
+      p.once("error", (e) => {
+        clearTimeout(timer);
+        if (force) clearTimeout(force);
+        reject(e);
+      });
+      p.once("close", (code) => {
+        clearTimeout(timer);
+        if (force) clearTimeout(force);
+        resolve({ code, stdout: out, sourceError: sourceError() });
+      });
+    },
+  );
 export function createEngine(options: EngineOptions) {
   const host = options.host ?? "127.0.0.1",
     port = options.port ?? 47821,
@@ -363,7 +374,7 @@ export function createEngine(options: EngineOptions) {
   api.get("/info", (_req, res) =>
     res.json({
       name: "FanSnipe",
-      version: "0.1.2",
+      version: engineVersion,
       protocolVersion: 1,
       mode,
     }),
@@ -519,34 +530,8 @@ export function createEngine(options: EngineOptions) {
     res.json({ ok: true });
   });
   const fixture = (u: URL) => (options.fixtureOrigins ?? []).includes(u.origin);
-  function validateUrl(input: unknown): URL {
-    if (typeof input !== "string" || input.length > 2048)
-      throw Error("Invalid URL");
-    const u = new URL(input);
-    if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
-      throw Error("Invalid URL");
-    const h = u.hostname.toLowerCase();
-    const allowed = [
-      "twitch.tv",
-      "youtube.com",
-      "youtu.be",
-      "kick.com",
-      "chaturbate.com",
-    ].some((d) => h === d || h.endsWith("." + d));
-    if (!allowed && !fixture(u)) throw Error("Unsupported URL");
-    if (!fixture(u) && u.protocol !== "https:") throw Error("HTTPS required");
-    return u;
-  }
-  const platform = (u: URL) =>
-    u.hostname.includes("twitch")
-      ? "twitch"
-      : u.hostname.includes("youtube") || u.hostname === "youtu.be"
-        ? "youtube"
-        : u.hostname.includes("kick")
-          ? "kick"
-          : u.hostname.includes("chaturbate")
-            ? "chaturbate"
-            : "other";
+  const validateUrl = (input: unknown) =>
+    validateStreamUrl(input, options.fixtureOrigins);
   const disk = (folder = settings.recordingsPath) => {
     mkdirSync(folder, { recursive: true });
     const s = statfsSync(folder);
@@ -624,6 +609,7 @@ export function createEngine(options: EngineOptions) {
       options.ytDlpPath ?? "yt-dlp",
       [
         "--ignore-config",
+        "--no-geo-bypass",
         "--no-plugin-dirs",
         "--ffmpeg-location",
         options.ffmpegPath ?? "ffmpeg",
@@ -639,15 +625,16 @@ export function createEngine(options: EngineOptions) {
       ],
       20000,
     );
-    return (
-      result.code === 0 &&
-      result.stdout
-        .trim()
-        .split("\n")
-        .some((x) => x === "is_live")
-    );
+    if (result.code !== 0) {
+      if (isOfflineError(result.sourceError)) return false;
+      throw new SourceCheckError(result.sourceError ?? unknownSourceError);
+    }
+    return result.stdout
+      .trim()
+      .split("\n")
+      .some((x) => x === "is_live");
   }
-  async function finish(r: Obj, success: boolean) {
+  async function finish(r: Obj, success: boolean, sourceError?: string) {
     const output = r.filePath;
     const capture = r.capturePath ?? output + ".capture.ts";
     const staging = output + `.finalizing.${r.format}`;
@@ -660,7 +647,7 @@ export function createEngine(options: EngineOptions) {
     if (!existsSync(capture) || !size(capture)) {
       update(r, {
         status: "failed",
-        error: "Recording produced no media",
+        error: sourceError ?? "Recording produced no media",
         completedAt: now(),
       });
       return;
@@ -844,16 +831,18 @@ export function createEngine(options: EngineOptions) {
       uploadedToCloud: false,
     };
     put("recordings", r);
-    const capture = filePath + ".capture.ts";
+    // yt-dlp appends its merge extension when it differs from the requested path.
+    // Matching the live muxer keeps partial and completed bytes at the tracked path.
+    const capture = filePath + (fixture(u) ? ".capture.ts" : ".capture.mkv");
     r.capturePath = capture;
     put("recordings", r);
-    const map: Obj = {
-      best: "best",
-      "1080p": "best[height<=1080]/best",
-      "720p": "best[height<=720]/best",
-      "480p": "best[height<=480]/best",
-      "360p": "best[height<=360]/best",
-    };
+    const height =
+      quality === "best" ? "" : `[height<=${parseInt(quality, 10)}]`;
+    // Prefer one combined stream. A split source needs concurrent audio/video
+    // inputs, since downloading an open-ended video and then audio cannot finish.
+    const formatSelector = height
+      ? `b${height}/bv${height}+ba/b/bv+ba`
+      : "b/bv+ba";
     const args = fixture(u)
       ? [
           "-y",
@@ -871,6 +860,7 @@ export function createEngine(options: EngineOptions) {
         ]
       : [
           "--ignore-config",
+          "--no-geo-bypass",
           "--no-plugin-dirs",
           "--ffmpeg-location",
           options.ffmpegPath ?? "ffmpeg",
@@ -879,10 +869,17 @@ export function createEngine(options: EngineOptions) {
             : []),
           "--no-playlist",
           "--no-part",
-          "--hls-use-mpegts",
+          "--downloader",
+          "ffmpeg",
+          "--merge-output-format",
+          "mkv",
+          "--downloader-args",
+          "ffmpeg_o:-f matroska -cluster_time_limit 1000 -flush_packets 1",
+          "--fixup",
+          "never",
           "--no-live-from-start",
           "-f",
-          map[quality],
+          formatSelector,
           "-o",
           capture,
           "--",
@@ -922,11 +919,12 @@ export function createEngine(options: EngineOptions) {
             ...args,
           ],
       {
-        stdio: ["pipe", "ignore", "ignore"],
+        stdio: ["pipe", "ignore", "pipe"],
         detached: process.platform !== "win32",
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       },
     );
+    const sourceError = readRecorderError(child.stderr);
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
@@ -966,6 +964,7 @@ export function createEngine(options: EngineOptions) {
             (code === 0 || (process.platform !== "win32" && entry.stop)) &&
               !entry.forced &&
               !entry.reason,
+            entry.stop ? undefined : (sourceError() ?? unknownSourceError),
           );
       } finally {
         processes.delete(id);
@@ -1301,8 +1300,13 @@ export function createEngine(options: EngineOptions) {
     if (!c) return err(res, 404, "Channel not found");
     try {
       return res.json({ isLive: await check(c) });
-    } catch {
-      return err(res, 502, "Live check failed");
+    } catch (e) {
+      // Only report classified tool errors, never raw fetch or filesystem errors.
+      return err(
+        res,
+        502,
+        e instanceof SourceCheckError ? e.message : "Live check failed",
+      );
     }
   });
   api.get("/channels/:id/stats", (req, res) => {
@@ -1669,7 +1673,7 @@ export function createEngine(options: EngineOptions) {
         totalRecordings: all("recordings").length,
         totalChannels: all("channels").length,
         disk: disk(),
-        version: "0.1.2",
+        version: engineVersion,
         uptime: process.uptime(),
       });
     } catch {
@@ -1678,7 +1682,7 @@ export function createEngine(options: EngineOptions) {
   });
   api.get("/diagnostics", (_req, res) =>
     res.json({
-      version: "0.1.2",
+      version: engineVersion,
       protocolVersion: 1,
       mode,
       activeRecordings: processes.size,
@@ -1964,7 +1968,7 @@ export function createEngine(options: EngineOptions) {
       return publicSettings();
     },
     diagnostics: () => ({
-      version: "0.1.2",
+      version: engineVersion,
       protocolVersion: 1,
       mode,
       activeRecordings: processes.size,

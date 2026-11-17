@@ -14,7 +14,7 @@ test("API identifies the new brand while keeping protocol version 1", async () =
       await fetch(`http://127.0.0.1:${addr.port}/api/v1/info`)
     ).json();
     assert.equal(info.name, "FanSnipe");
-    assert.equal(info.version, "0.1.2");
+    assert.equal(info.version, "0.1.3");
     assert.equal(info.protocolVersion, 1);
   } finally {
     await engine.stop();
