@@ -56,6 +56,8 @@ The beta image is `ghcr.io/fanclan/fansnipe:v0.1.1-beta.1`, with manifest digest
 
 Recordings and application data belong in persistent user-managed volumes. When upgrading an existing StreamSnipe Compose installation, stop active recordings and the old `streamsnipe` service with its original project name, retain both volumes, and start FanSnipe with the same project name. See the [Compose upgrade details](desktop/PACKAGING.md) before changing project names or directories.
 
+Starting with Docker 0.1.2, you can also connect [fansnipe.com/app](https://fansnipe.com/app/) to Docker on the same computer. Enable `FANSNIPE_HOSTED_DASHBOARD=true`, keep the default loopback port binding, and approve pairing in the local page opened by the website. Enter the setup token only in that local page. The bridge is off by default and cannot be combined with `FANSNIPE_PUBLIC_ORIGIN`; see the [hosted Docker setup](desktop/PACKAGING.md) for instructions. Recordings still travel directly from Docker to your browser.
+
 ## Development and API
 
 The companion owns the `/api/v1` contract, recording engine, SQLite catalog, and desktop/Docker packaging. The portal owns the dashboard source and publishes the immutable dashboard bundle embedded by companion releases.

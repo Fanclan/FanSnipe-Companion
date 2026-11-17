@@ -3,6 +3,8 @@ import path from "node:path";
 
 /** Preserve the old catalog in place until a new catalog exists. */
 export function resolveServerConfig(env: NodeJS.ProcessEnv, home: string) {
+  if (env.FANSNIPE_HOSTED_DASHBOARD === "true" && env.PUBLIC_ORIGIN)
+    throw new Error("Hosted dashboard cannot be combined with PUBLIC_ORIGIN");
   const current = path.join(home, ".fansnipe");
   const legacy = path.join(home, ".streamsnipe");
   const dataDir =
@@ -14,6 +16,7 @@ export function resolveServerConfig(env: NodeJS.ProcessEnv, home: string) {
         : current);
   return {
     dataDir,
+    hostedDashboard: env.FANSNIPE_HOSTED_DASHBOARD === "true",
     mode:
       (env.FANSNIPE_MODE ?? env.STREAMSNIPE_MODE) === "docker"
         ? ("docker" as const)

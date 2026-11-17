@@ -5,6 +5,8 @@ services:
       - "${FANSNIPE_BIND:-${STREAMSNIPE_BIND:-127.0.0.1}}:47821:47821"
     environment:
       PUBLIC_ORIGIN: "${FANSNIPE_PUBLIC_ORIGIN:-${STREAMSNIPE_PUBLIC_ORIGIN:-}}"
+      # Opt in only when Docker and the browser run on the same computer.
+      FANSNIPE_HOSTED_DASHBOARD: "${FANSNIPE_HOSTED_DASHBOARD:-false}"
     volumes:
       - streamsnipe-data:/data
       - streamsnipe-media:/media
