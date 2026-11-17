@@ -1,12 +1,23 @@
 {
-  "name": "@fanclan/streamsnipe-protocol",
-  "version": "1.0.1",
-  "description": "StreamSnipe local companion API contracts, by the team at Fanclan.io",
+  "name": "@fanclan/fansnipe-protocol",
+  "version": "1.0.2",
+  "description": "FanSnipe local companion API contracts, by the team at Fanclan.io",
   "type": "module",
   "types": "index.d.ts",
-  "files": ["index.d.ts", "openapi.json", "README.md", "LICENSE"],
-  "author": "Fanclan.io <https://fanclan.io>",
-  "maintainers": ["zerodayprime"],
+  "files": [
+    "index.d.ts",
+    "openapi.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "The team at Fanclan.io <https://fanclan.io>",
+  "maintainers": [
+    "zerodayprime"
+  ],
   "license": "MIT",
-  "repository": {"type": "git", "url": "https://github.com/Fanclan/StreamSnipe-Companion.git", "directory": "protocol"}
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fanclan/FanSnipe-Companion.git",
+    "directory": "protocol"
+  }
 }

@@ -4,7 +4,7 @@ export type RecordingFormat = 'mp4' | 'mkv' | 'ts';
 export type RecordingQuality = 'best' | '1080p' | '720p' | '480p' | '360p';
 export type MediaKind = 'stream' | 'download' | 'preview' | 'thumbnail';
 export interface CompanionInfo {
-  name: 'StreamSnipe'; version: string; protocolVersion: 1; mode: 'desktop' | 'docker';
+  name: 'FanSnipe' | 'StreamSnipe'; version: string; protocolVersion: 1; mode: 'desktop' | 'docker';
 }
 export interface PairingChallenge {
   id: string; code: string; expiresAt: string; pollToken: string;
