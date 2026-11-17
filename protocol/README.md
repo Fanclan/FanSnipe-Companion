@@ -9,3 +9,9 @@ Pairing: POST `/pairings` with `{name}`, poll GET `/pairings/:id` with `X-Pairin
 Ticket URLs are returned by POST `/recordings/:id/media-ticket` with a `kind`. They are short-lived credentials for local media, support HTTP Range, and must not appear in hosted logs or telemetry. Renew through the authenticated API while preserving playback position. Never put the long-lived browser credential in a URL.
 
 Maintained by [zerodayprime](https://github.com/zerodayprime), by the team at [Fanclan.io](https://fanclan.io).
+
+## Local studio capabilities
+
+Version 1.1.0 adds optional capabilities to protocol v1. Clients check `/info` before offering password unlock, source inspection, or moving previews. The Docker unlock endpoint accepts the operator's configured password only from the local studio or its configured HTTPS origin. It returns a normal revocable browser session.
+
+Source inspection only returns display metadata. Live preview tickets belong to the requesting session and refer only to the companion. Open one with a supported page URL before capture, or an active recording ID to watch captured bytes. Closing a viewer does not stop the recording.

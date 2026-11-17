@@ -5,6 +5,8 @@ export type RecordingQuality = 'best' | '1080p' | '720p' | '480p' | '360p';
 export type MediaKind = 'stream' | 'download' | 'preview' | 'thumbnail';
 export interface CompanionInfo {
   name: 'FanSnipe' | 'StreamSnipe'; version: string; protocolVersion: 1; mode: 'desktop' | 'docker';
+  capabilities?: { studioPassword: boolean; sourceInspection: boolean; livePreview: boolean };
+  studioPasswordConfigured?: boolean;
 }
 export interface PairingChallenge {
   id: string; code: string; expiresAt: string; pollToken: string;
@@ -55,3 +57,11 @@ export type CompanionEvent =
   | {type: 'channel_update'; data: Channel}
   | {type: 'notification'; data: {message?: string; [key: string]: unknown}};
 export interface ApiError {error: string; code?: string}
+export interface StudioUnlock { password: string; name?: string }
+export interface SourceInspection {
+  platform: string;
+  status: 'live' | 'available' | 'offline' | 'unknown' | 'restricted' | 'unsupported';
+  title?: string; creator?: string; reason?: string;
+}
+export type StartPreview = { url: string; recordingId?: never; previewId?: never } | { recordingId: string; url?: never; previewId?: never } | { previewId: string; url?: never; recordingId?: never };
+export interface LivePreviewTicket extends MediaTicket { id: string }
