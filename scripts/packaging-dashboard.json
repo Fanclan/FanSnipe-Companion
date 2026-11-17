@@ -1,10 +1,10 @@
 {
   "protocolVersion": 1,
-  "artifact": "dashboard-v0.1.1.tar.gz",
-  "archiveSha256": "45f967765e69db67e134aece2c0f7fcb6b09962f695615aeafa480b1354a854e",
+  "artifact": "dashboard-v0.1.2.tar.gz",
+  "archiveSha256": "1028c64d6b2fd6e80efbf6a1f767acd29c46f7e3d925a35e2078deb86f4ad386",
   "files": {
     "assets/index-BP0NWU1n.css": "a89b3d38fadafe8deb8bc3630d01568addadeedf743f567642a6c91498fc5c23",
-    "assets/index-C00dceN_.js": "4f331904f2adb98c4664046d85285ca56bef08b983d9e9e4bbafa9e947286e1d",
-    "index.html": "8505ca41cbda6851a046fb4f8d7919201f44da1a9e73c650d25a6d4759aa0621"
+    "assets/index-BhF9sCQP.js": "6bdf7c79da5b5f5a59c1ac2e2b8a62778787179d52f4daa63d1045cec52e2328",
+    "index.html": "146e4221ade43a42f6f5296d5220742c93023c2e8130ec2f246fd36cd8de81d1"
   }
 }

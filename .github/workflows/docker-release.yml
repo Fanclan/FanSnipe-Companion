@@ -1,0 +1,117 @@
+name: Build Docker release
+on:
+  push:
+    tags: ['docker-v*']
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: docker-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  image:
+    name: Build and test ${{ matrix.arch }}
+    environment: beta
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Validate Docker beta tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: '[[ "$RELEASE_TAG" =~ ^docker-v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Fetch pinned dashboard archive
+        run: |
+          artifact=$(node -p "require('./scripts/packaging-dashboard.json').artifact")
+          version=${artifact%.tar.gz}
+          curl --fail --location --proto '=https' "https://github.com/Fanclan/FanSnipe-Portal/releases/download/$version/$artifact" -o dashboard.tar.gz
+          node -e "const fs=require('fs'),c=require('crypto'),lock=require('./scripts/packaging-dashboard.json');if(c.createHash('sha256').update(fs.readFileSync('dashboard.tar.gz')).digest('hex')!==lock.archiveSha256)process.exit(1)"
+          python3 scripts/packaging-dashboard-extract.py dashboard.tar.gz staging/dashboard scripts/packaging-dashboard.json
+      - name: Build native image
+        run: docker buildx build --platform linux/${{ matrix.arch }} --load -t fansnipe:smoke .
+      - name: Test packaged local bridge
+        run: node scripts/packaging-docker-smoke.mjs fansnipe:smoke
+      - name: Authenticate to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Publish verified platform with provenance and SBOM
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --provenance=mode=max --sbom=true --output type=image,name=ghcr.io/fanclan/fansnipe,push-by-digest=true,name-canonical=true,push=true --metadata-file image-metadata.json .
+          mkdir -p digests
+          node -e "const fs=require('fs'),digest=JSON.parse(fs.readFileSync('image-metadata.json'))['containerimage.digest'];if(!/^sha256:[a-f0-9]{64}$/.test(digest))throw Error('Missing image digest');fs.writeFileSync('digests/'+digest.slice(7),'')"
+      - name: Test the exact published platform digest
+        run: |
+          digest=$(node -p "require('./image-metadata.json')['containerimage.digest']")
+          docker pull "ghcr.io/fanclan/fansnipe@$digest"
+          node scripts/packaging-docker-smoke.mjs "ghcr.io/fanclan/fansnipe@$digest"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+  manifest:
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: docker-digest-*
+          path: digests
+          merge-multiple: true
+      - name: Authenticate to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Verify candidate manifest before publishing release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^docker-v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]
+          final="ghcr.io/fanclan/fansnipe:$RELEASE_TAG"
+          if existing=$(docker buildx imagetools inspect "$final" 2>&1); then
+            echo 'Release image already exists; choose a new immutable beta tag.' >&2
+            exit 1
+          elif [[ "$existing" != *': not found'* && "$existing" != *'manifest unknown'* ]]; then
+            echo 'Could not verify that the release tag is unused.' >&2
+            exit 1
+          fi
+          images=()
+          for digest in digests/*; do images+=("ghcr.io/fanclan/fansnipe@sha256:${digest##*/}"); done
+          test "${#images[@]}" -eq 2
+          candidate="ghcr.io/fanclan/fansnipe:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker buildx imagetools create --tag "$candidate" "${images[@]}"
+          docker buildx imagetools inspect --raw "$candidate" > docker-manifest.json
+          python3 - <<'PY'
+          import json
+          m=json.load(open('docker-manifest.json'))
+          platforms={(x['platform']['os'],x['platform']['architecture']) for x in m['manifests']}
+          assert {('linux','amd64'),('linux','arm64')} <= platforms
+          assert sum(x.get('annotations',{}).get('vnd.docker.reference.type') == 'attestation-manifest' for x in m['manifests']) == 2
+          PY
+          digest=$(sha256sum docker-manifest.json | cut -d' ' -f1)
+          docker buildx imagetools create --tag "$final" "ghcr.io/fanclan/fansnipe@sha256:$digest"
+          docker buildx imagetools inspect --raw "$final" > final-manifest.json
+          cmp docker-manifest.json final-manifest.json
+          docker buildx imagetools inspect "$final" | tee docker-release.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: docker-release-manifest
+          path: |
+            docker-release.txt
+            docker-manifest.json
+          if-no-files-found: error
