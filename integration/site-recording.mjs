@@ -177,7 +177,13 @@ try {
     }
     throw Error("Recording did not finalize");
   }
+  const inspection = await api("/sources/inspect", {
+    url: "https://chaturbate.com/fansnipe-fixture/",
+  });
+  assert.equal(inspection.status, "live");
+  assert.match(inspection.title, /fansnipe-fixture/i);
   const row = await record();
+  assert.match(row.title, /fansnipe-fixture/i);
   assert.ok(
     roomCalls > 0,
     "Packaged extractor did not reach the closed-network site fixture",

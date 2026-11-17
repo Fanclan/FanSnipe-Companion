@@ -14,8 +14,11 @@ export function resolveServerConfig(env: NodeJS.ProcessEnv, home: string) {
       : existsSync(path.join(legacy, "engine.sqlite"))
         ? legacy
         : current);
+  const defaultPasswordFile = "/run/secrets/fansnipe_studio_password";
   return {
     dataDir,
+    studioPasswordFile:
+      env.FANSNIPE_STUDIO_PASSWORD_FILE || defaultPasswordFile,
     hostedDashboard: env.FANSNIPE_HOSTED_DASHBOARD === "true",
     mode:
       (env.FANSNIPE_MODE ?? env.STREAMSNIPE_MODE) === "docker"

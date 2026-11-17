@@ -1,3 +1,13 @@
+import { LivePreviews, PreviewError } from "./previews.js";
+import {
+  createInspectionCache,
+  displayTemplate,
+  displayText,
+  projectedSource,
+  recordingTitle,
+  type SourceInspection,
+} from "./source-inspection.js";
+import { createStudioLogin } from "./studio-password.js";
 import { platformForUrl as platform, validateStreamUrl } from "./platforms.js";
 import express, {
   type Request,
@@ -38,12 +48,13 @@ import { WebSocketServer, WebSocket } from "ws";
 import { S3Client } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import {
+  deniedSourceError,
   isOfflineError,
   readRecorderError,
   unknownSourceError,
 } from "./recorder-errors.js";
 
-const engineVersion = "0.1.3";
+const engineVersion = "0.1.4";
 type Obj = Record<string, any>;
 export interface EngineOptions {
   dataDir: string;
@@ -62,6 +73,7 @@ export interface EngineOptions {
   mode?: "desktop" | "docker";
   allowedOrigins?: string[];
   setupToken?: string;
+  studioPasswordFile?: string;
   monitor?: boolean;
   fixtureOrigins?: string[];
   testFfmpegPrefixArgs?: string[];
@@ -185,6 +197,10 @@ export function createEngine(options: EngineOptions) {
   db.exec(
     "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS channels (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS recordings (id TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL); PRAGMA user_version=1; COMMIT;",
   );
+  const studioLogin =
+    mode === "docker"
+      ? createStudioLogin(db, options.studioPasswordFile)
+      : undefined;
   const get = (table: string, id: string): Obj | undefined => {
     const row = db.prepare(`SELECT data FROM ${table} WHERE id=?`).get(id) as
       Obj | undefined;
@@ -252,6 +268,7 @@ export function createEngine(options: EngineOptions) {
   const authenticated = new Map<WebSocket, string>();
   const mediaResponses = new Map<Response, string>();
   const closeSession = (id: string) => {
+    previews.revoke(id);
     for (const [response, sessionId] of mediaResponses)
       if (sessionId === id) response.destroy();
     for (const [key, t] of tickets) if (t.sessionId === id) tickets.delete(key);
@@ -361,6 +378,18 @@ export function createEngine(options: EngineOptions) {
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
   });
+  if (mode === "docker")
+    app.get("/", (req, res) => {
+      const h = req.headers.host ?? "";
+      if (!publicOrigin && loopbackHost(h)) {
+        const port = new URL(`http://${h}`).port;
+        return res.redirect(
+          302,
+          `http://127.0.0.1${port ? ":" + port : ""}/app/`,
+        );
+      }
+      return res.redirect(302, "/app/");
+    });
   app.use(express.json({ limit: "64kb" }));
   app.use((_req, res, next) =>
     stopping ? err(res, 503, "Engine is shutting down") : next(),
@@ -372,13 +401,96 @@ export function createEngine(options: EngineOptions) {
     next();
   });
   api.get("/info", (_req, res) =>
-    res.json({
+    res.set("Cache-Control", "no-store").json({
       name: "FanSnipe",
       version: engineVersion,
       protocolVersion: 1,
       mode,
+      capabilities: {
+        studioPassword: mode === "docker",
+        sourceInspection: true,
+        livePreview: true,
+      },
+      studioPasswordConfigured: studioLogin?.configured() ?? false,
     }),
   );
+  function issueSession(name: string, passwordSession = false) {
+    const id = randomUUID(),
+      raw = token();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(
+        "INSERT INTO sessions(id,token_hash,name,created_at,expires_at) VALUES(?,?,?,?,?)",
+      ).run(
+        id,
+        hash(raw),
+        name,
+        now(),
+        new Date(Date.now() + 30 * 86400000).toISOString(),
+      );
+      if (passwordSession)
+        db.prepare("INSERT INTO studio_password_sessions(id) VALUES(?)").run(
+          id,
+        );
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return raw;
+  }
+  api.post("/studio/unlock", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const origin = req.headers.origin,
+      h = req.headers.host ?? "";
+    const correctOrigin = publicOrigin
+      ? publicOrigin.startsWith("https://") &&
+        origin === publicOrigin &&
+        h === new URL(publicOrigin).host
+      : loopbackHost(h) && origin === `http://${h}`;
+    if (
+      !studioLogin ||
+      !correctOrigin ||
+      origin === hostedOrigin ||
+      (req.headers["sec-fetch-site"] &&
+        req.headers["sec-fetch-site"] !== "same-origin")
+    )
+      return err(
+        res,
+        403,
+        "Open your local FanSnipe studio to enter the password",
+      );
+    if (!req.is("application/json")) return err(res, 415, "JSON required");
+    const result = await studioLogin.unlock(
+      req.body?.password,
+      req.socket.remoteAddress ?? "",
+    );
+    if (result === "unconfigured")
+      return err(
+        res,
+        409,
+        "Set a single-line studio password of 8–1024 UTF-8 bytes in your Docker password file",
+      );
+    if (result === "limited") {
+      res.setHeader("Retry-After", "60");
+      return err(
+        res,
+        429,
+        "Too many unlock attempts. Try again in one minute.",
+      );
+    }
+    if (result !== "allowed") return err(res, 401, "Incorrect studio password");
+    if (stopping) return err(res, 503, "Engine is shutting down");
+    const name = req.body?.name;
+    if (
+      name !== undefined &&
+      (typeof name !== "string" || !name.trim() || name.length > 100)
+    )
+      return err(res, 422, "Invalid browser name");
+    return res.json({
+      token: issueSession(name?.trim() ?? "Local studio browser", true),
+    });
+  });
   const rate = new Map<string, number[]>();
   api.post("/pairings", (req, res) => {
     const ip = req.ip ?? "";
@@ -430,18 +542,8 @@ export function createEngine(options: EngineOptions) {
       const p = clients.get(id);
       if (!p || p.status !== "pending" || Date.parse(p.expiresAt) <= Date.now())
         return false;
-      const raw = token(),
-        createdAt = now(),
-        expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
-      db.prepare("INSERT INTO sessions VALUES(?,?,?,?,?)").run(
-        randomUUID(),
-        hash(raw),
-        p.name,
-        createdAt,
-        expiresAt,
-      );
+      p.token = issueSession(p.name);
       p.status = "approved";
-      p.token = raw;
       return true;
     },
   };
@@ -596,44 +698,62 @@ export function createEngine(options: EngineOptions) {
       timeout,
     );
   };
-  async function checkLive(url: string) {
-    const u = validateUrl(url);
-    if (fixture(u)) {
-      const response = await fetch(u, {
-        signal: AbortSignal.timeout(10000),
-        redirect: "error",
-      });
-      return response.ok && (await response.text()).includes("#EXTM3U");
-    }
-    const result = await runTool(
-      options.ytDlpPath ?? "yt-dlp",
-      [
-        "--ignore-config",
-        "--no-geo-bypass",
-        "--no-plugin-dirs",
-        "--ffmpeg-location",
-        options.ffmpegPath ?? "ffmpeg",
-        ...(options.jsRuntimePath
-          ? ["--js-runtimes", `deno:${options.jsRuntimePath}`]
-          : []),
-        "--no-playlist",
-        "--skip-download",
-        "--print",
-        "%(live_status)s",
-        "--",
-        u.href,
-      ],
-      20000,
-    );
-    if (result.code !== 0) {
-      if (isOfflineError(result.sourceError)) return false;
-      throw new SourceCheckError(result.sourceError ?? unknownSourceError);
-    }
-    return result.stdout
-      .trim()
-      .split("\n")
-      .some((x) => x === "is_live");
-  }
+  const inspections = createInspectionCache(
+    async (u: URL): Promise<SourceInspection> => {
+      const site = platform(u);
+      try {
+        if (fixture(u)) {
+          const response = await fetch(u, {
+            signal: AbortSignal.timeout(10000),
+            redirect: "error",
+          });
+          const live =
+            response.ok && (await response.text()).includes("#EXTM3U");
+          return { platform: site, status: live ? "live" : "offline" };
+        }
+        const result = await runTool(
+          options.ytDlpPath ?? "yt-dlp",
+          [
+            ...(options.testYtDlpPrefixArgs ?? []),
+            "--ignore-config",
+            "--no-geo-bypass",
+            "--no-plugin-dirs",
+            "--ffmpeg-location",
+            options.ffmpegPath ?? "ffmpeg",
+            ...(options.jsRuntimePath
+              ? ["--js-runtimes", `deno:${options.jsRuntimePath}`]
+              : []),
+            "--no-playlist",
+            "--simulate",
+            "--skip-download",
+            "--print",
+            displayTemplate,
+            "--",
+            u.href,
+          ],
+          20000,
+        );
+        if (result.code === 0)
+          return projectedSource(u, JSON.parse(result.stdout.trim()));
+        const reason = result.sourceError ?? unknownSourceError;
+        return {
+          platform: site,
+          status: isOfflineError(reason)
+            ? "offline"
+            : reason === deniedSourceError
+              ? "restricted"
+              : "unknown",
+          reason,
+        };
+      } catch {
+        return {
+          platform: site,
+          status: "unknown",
+          reason: unknownSourceError,
+        };
+      }
+    },
+  );
   async function finish(r: Obj, success: boolean, sourceError?: string) {
     const output = r.filePath;
     const capture = r.capturePath ?? output + ".capture.ts";
@@ -786,21 +906,30 @@ export function createEngine(options: EngineOptions) {
       });
     }
   }
+  const preparingRecordings = new Map<
+    string,
+    { channelId?: string; url: string }
+  >();
   async function startRecording(input: Obj) {
     const u = validateUrl(input.url);
     const quality = input.quality ?? settings.defaultQuality,
       format = input.format ?? settings.defaultFormat;
     if (!qualities.includes(quality) || !formats.includes(format))
       throw Error("Invalid quality or format");
-    if (processes.size >= settings.maxConcurrentRecordings)
+    if (
+      processes.size + preparingRecordings.size >=
+      settings.maxConcurrentRecordings
+    )
       throw Object.assign(Error("Recording limit reached"), { status: 409 });
     if (
       input.channelId &&
-      processes.size &&
-      all("recordings").some(
-        (r) =>
-          r.channelId === input.channelId && activeStates.includes(r.status),
-      )
+      ([...preparingRecordings.values()].some(
+        (p) => p.channelId === input.channelId,
+      ) ||
+        all("recordings").some(
+          (r) =>
+            r.channelId === input.channelId && activeStates.includes(r.status),
+        ))
     )
       throw Object.assign(Error("Channel already recording"), { status: 409 });
     if (disk().usedPercent >= settings.maxDiskUsagePercent)
@@ -811,16 +940,32 @@ export function createEngine(options: EngineOptions) {
         realpathSync(settings.recordingsPath),
         `${id}.${format}`,
       );
+    // Once an accepted recording supersedes preview-only ingestion, reserve its
+    // slot until the preview's supervised upstream has actually closed.
+    const priorPreview = previews.stopSource("url:" + u.href);
+    if (priorPreview) {
+      preparingRecordings.set(id, { channelId: input.channelId, url: u.href });
+      try {
+        await priorPreview;
+        if (stopping)
+          throw Object.assign(Error("Engine is shutting down"), {
+            status: 503,
+          });
+      } finally {
+        preparingRecordings.delete(id);
+      }
+    }
+    const customTitle = displayText(input.title);
+    const channelName = input.channelId
+      ? get("channels", input.channelId)?.name
+      : undefined;
     const r: Obj = {
       id,
       managed: true,
       channelId: input.channelId || undefined,
       url: u.href,
       platform: platform(u),
-      title:
-        typeof input.title === "string"
-          ? input.title.slice(0, 200)
-          : `Recording ${now()}`,
+      title: customTitle ?? recordingTitle(u, inspections.peek(u), channelName),
       status: "starting",
       quality,
       format,
@@ -869,6 +1014,9 @@ export function createEngine(options: EngineOptions) {
             : []),
           "--no-playlist",
           "--no-part",
+          "--no-simulate",
+          "--print",
+          "before_dl:" + displayTemplate,
           "--downloader",
           "ffmpeg",
           "--merge-output-format",
@@ -919,11 +1067,38 @@ export function createEngine(options: EngineOptions) {
             ...args,
           ],
       {
-        stdio: ["pipe", "ignore", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       },
     );
+    // The downloader emits one projected JSON line before capturing. Direct
+    // and automatic starts get the broadcast title without a second site request.
+    let metadataLine = "";
+    if (!customTitle && !fixture(u)) {
+      child.stdout
+        ?.setEncoding("utf8")
+        .on("data", function readTitle(chunk: string) {
+          metadataLine += chunk;
+          const end = metadataLine.indexOf("\n");
+          if (end < 0 && metadataLine.length <= 16384) return;
+          child.stdout?.off("data", readTitle);
+          if (end >= 0 && end <= 16384) {
+            try {
+              const info = projectedSource(
+                u,
+                JSON.parse(metadataLine.slice(0, end)),
+              );
+              if (info.title || info.creator)
+                update(r, { title: recordingTitle(u, info, channelName) });
+            } catch {
+              /* A missing display field must never interrupt a capture. */
+            }
+          }
+          metadataLine = "";
+        });
+    }
+    child.stdout?.resume();
     const sourceError = readRecorderError(child.stderr);
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
@@ -948,6 +1123,7 @@ export function createEngine(options: EngineOptions) {
     child.once("spawn", () => update(r, { status: "recording" }));
     child.once("close", async (code) => {
       try {
+        await previews.stopSource("recording:" + id);
         if (entry.reason === "process tree did not exit") {
           const capture = r.capturePath ?? r.filePath + ".capture.ts";
           update(r, {
@@ -1043,6 +1219,92 @@ export function createEngine(options: EngineOptions) {
   workerGate.exec("COMMIT");
   workerGate.close();
   api.use(requireAuth);
+
+  const previews = new LivePreviews({
+    dataDir: canonicalDataDir,
+    lease: workerLeasePath,
+    ffmpeg: options.ffmpegPath ?? "ffmpeg",
+    ytDlp: options.ytDlpPath ?? "yt-dlp",
+    jsRuntime: options.jsRuntimePath,
+    jobRunner: options.jobRunnerPath,
+    ytDlpPrefix: options.testYtDlpPrefixArgs,
+    sessionValid: (id) =>
+      !!db
+        .prepare("SELECT id FROM sessions WHERE id=? AND expires_at>?")
+        .get(id, now()),
+  });
+  app.get("/preview-media/:ticket/:file", (req, res) =>
+    previews.serve(req, res),
+  );
+  api.post("/previews", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const body = req.body ?? {};
+    const inputs = ["url", "recordingId", "previewId"].filter(
+      (k) => body[k] !== undefined,
+    );
+    if (inputs.length !== 1 || typeof body[inputs[0]] !== "string")
+      return err(res, 422, "Choose a stream or active recording to preview");
+    const owner = res.locals.session.id;
+    try {
+      if (body.previewId !== undefined)
+        return res.status(201).json(previews.renew(body.previewId, owner));
+      let url: URL | undefined;
+      if (body.url !== undefined) {
+        try {
+          url = validateUrl(body.url);
+        } catch {
+          return err(res, 422, "Unsupported stream URL");
+        }
+      }
+      const ticket = await previews.create(owner, () => {
+        if (res.destroyed || stopping)
+          throw new PreviewError(503, "Preview request closed");
+        const record = url
+          ? [...processes.keys()]
+              .map((id) => get("recordings", id))
+              .find((r) => r?.url === url.href)
+          : get("recordings", body.recordingId);
+        if (record || !url) {
+          const process = record && processes.get(record.id);
+          if (
+            !record ||
+            !process ||
+            process.stop ||
+            process.child.exitCode !== null ||
+            process.child.signalCode !== null ||
+            !["starting", "recording"].includes(record.status)
+          )
+            throw new PreviewError(409, "Recording is no longer active");
+          return {
+            key: "recording:" + record.id,
+            input: { capture: record.capturePath },
+          };
+        }
+        if ([...preparingRecordings.values()].some((p) => p.url === url.href))
+          throw new PreviewError(
+            409,
+            "Recording is starting. Open its recording preview.",
+          );
+        return {
+          key: "url:" + url.href,
+          input: { url: url.href, fixture: fixture(url) },
+        };
+      });
+      return res.status(201).json(ticket);
+    } catch (e) {
+      return err(
+        res,
+        e instanceof PreviewError ? e.status : 503,
+        e instanceof PreviewError ? e.message : "Preview unavailable",
+      );
+    }
+  });
+  api.delete("/previews/:id", (req, res) =>
+    previews.close(String(req.params.id), res.locals.session.id)
+      ? res.json({ ok: true })
+      : err(res, 404, "Preview expired"),
+  );
+
   api.post("/settings/s3-approvals", (req, res) => {
     const destination = Object.fromEntries(
       ["s3Enabled", "s3Bucket", "s3Region", "s3Endpoint"].map((k) => [
@@ -1227,6 +1489,26 @@ export function createEngine(options: EngineOptions) {
     } catch {}
     return res.json(publicSettings());
   });
+  api.post("/sources/inspect", async (req, res) => {
+    let url: URL;
+    try {
+      url = validateUrl(req.body?.url);
+    } catch {
+      return res.json({
+        platform: "other",
+        status: "unsupported",
+        reason: "Use a supported HTTPS stream or channel link.",
+      });
+    }
+    try {
+      const source = await inspections.inspect(url, req.body?.refresh === true);
+      if (source.status === "live" || source.status === "available")
+        return res.json({ ...source, title: recordingTitle(url, source) });
+      return res.json(source);
+    } catch {
+      return err(res, 429, "Source checks are busy. Try again shortly.");
+    }
+  });
   api.get("/channels", (_req, res) => res.json(all("channels")));
   api.post("/channels", (req, res) => {
     try {
@@ -1286,7 +1568,10 @@ export function createEngine(options: EngineOptions) {
     res.json({ ok: true });
   });
   async function check(c: Obj) {
-    const isLive = await checkLive(c.url);
+    const source = await inspections.inspect(validateUrl(c.url), true);
+    if (source.status === "unknown" || source.status === "restricted")
+      throw new SourceCheckError(source.reason ?? unknownSourceError);
+    const isLive = source.status === "live";
     const current = get("channels", c.id);
     if (!current || current.url !== c.url || current.updatedAt !== c.updatedAt)
       return false;
@@ -1764,7 +2049,6 @@ export function createEngine(options: EngineOptions) {
             await startRecording({
               url: c.url,
               quality: c.quality,
-              title: c.name,
               channelId: c.id,
             });
         } catch {}
@@ -2016,10 +2300,12 @@ export function createEngine(options: EngineOptions) {
         return;
       }
       stopping = true;
+      await previews.stop();
       if (monitorTimer) clearTimeout(monitorTimer);
       if (healthTimer) clearInterval(healthTimer);
       while (monitoring)
         await new Promise((resolve) => setTimeout(resolve, 50));
+      await inspections.drain();
       const pendingUploads = [...uploadDone.values()];
       await Promise.allSettled(
         [...uploads.values()].map((upload) => upload.abort()),

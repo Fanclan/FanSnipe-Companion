@@ -4,10 +4,8 @@ import os from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { resolveServerConfig } from "./server-config.js";
-const { dataDir, mode, hostedDashboard } = resolveServerConfig(
-  process.env,
-  os.homedir(),
-);
+const { dataDir, mode, hostedDashboard, studioPasswordFile } =
+  resolveServerConfig(process.env, os.homedir());
 const docker = mode === "docker";
 let setupToken = process.env.SETUP_TOKEN;
 if (docker && !setupToken) {
@@ -31,6 +29,7 @@ const engine = createEngine({
   hostedDashboard,
   allowedOrigins: process.env.ALLOWED_ORIGINS?.split(",").filter(Boolean),
   setupToken,
+  studioPasswordFile,
   ytDlpPath: process.env.YT_DLP_PATH,
   ffmpegPath: process.env.FFMPEG_PATH,
   ffprobePath: process.env.FFPROBE_PATH,
