@@ -37,7 +37,7 @@ The recording engine uses yt-dlp and FFmpeg. Individual platform compatibility c
 
 Use [GitHub Releases](https://github.com/Fanclan/FanSnipe-Companion/releases) for published builds and their verification reports. Only assets present in a release are available; a platform listed as a target is not a claim that an installer has been published.
 
-Target platforms are macOS 13+ (Apple Silicon and Intel), Windows 11 x64, and Linux Docker hosts (AMD64 and ARM64). Desktop beta releases are labeled separately from signed stable releases.
+Target platforms are macOS 13+ (Apple Silicon and Intel), Windows 11 x64, and Linux Docker hosts (AMD64 and ARM64). The first desktop beta is unsigned: macOS builds are not notarized, and the Windows build is not signed. The Windows eight-hour soak is deferred; see the [beta release and verification](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/v0.1.1-beta.1) for completed checks.
 
 1. Install the companion and select a recording folder.
 2. Open the dashboard from the companion, or use the hosted portal in Chrome or Edge.
@@ -46,13 +46,15 @@ Target platforms are macOS 13+ (Apple Silicon and Intel), Windows 11 x64, and Li
 
 Closing the dashboard does not stop the companion. Recording requires the companion to remain running and the computer to remain awake. Explicitly quitting the companion stops active jobs gracefully.
 
+Upgrading from StreamSnipe: quit the old companion before starting FanSnipe. If no FanSnipe catalog exists, the desktop companion reuses an existing StreamSnipe catalog in place. If both exist, it uses the FanSnipe catalog and leaves the old one untouched.
+
 ## Docker
 
 This repository owns the Docker image and Compose configuration; no separate Docker repository is needed. The image includes the engine, dashboard, and media tools. Use the checked-in Compose configuration and the packaging documentation for build and volume configuration.
 
-The planned image namespace is `ghcr.io/fanclan/fansnipe`. Use a versioned release tag or digest verified in the release manifest. Published ports default to host loopback. For a NAS or another computer, use that instance's own dashboard with authentication and an HTTPS reverse proxy; the hosted portal's localhost connection targets the computer running your browser.
+The beta image is `ghcr.io/fanclan/fansnipe:v0.1.1-beta.1`, with manifest digest `sha256:e6aef80707cc2f2549a308ec448aa8aac74195c5bfd9e4f49bb535ecb988a4f8`. See the [beta release and verification](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/v0.1.1-beta.1) for its release manifest and checksums. Published ports default to host loopback. For a NAS or another computer, use that instance's own dashboard with authentication and an HTTPS reverse proxy; the hosted portal's localhost connection targets the computer running your browser.
 
-Recordings and application data belong in persistent user-managed volumes. Container replacement must preserve those volumes.
+Recordings and application data belong in persistent user-managed volumes. When upgrading an existing StreamSnipe Compose installation, stop active recordings and the old `streamsnipe` service with its original project name, retain both volumes, and start FanSnipe with the same project name. See the [Compose upgrade details](desktop/PACKAGING.md) before changing project names or directories.
 
 ## Development and API
 
