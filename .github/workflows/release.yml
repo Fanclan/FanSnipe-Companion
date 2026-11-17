@@ -80,7 +80,7 @@ jobs:
           node scripts/packaging-inputs.mjs '${{ matrix.target }}' dashboard-input packaging-input.json
           node scripts/packaging-stage.mjs packaging-input.json
           node -e "console.log(require('path').join(process.cwd(), 'staging', 'tools'))" >> "$GITHUB_PATH"
-          if [[ '${{ matrix.target }}' == win32-* ]]; then node -e "console.log('JOB_RUNNER_PATH='+require('path').join(process.cwd(), 'staging','tools','StreamSnipe.JobRunner.exe'))" >> "$GITHUB_ENV"; fi
+          if [[ '${{ matrix.target }}' == win32-* ]]; then node -e "console.log('JOB_RUNNER_PATH='+require('path').join(process.cwd(), 'staging','tools','FanSnipe.JobRunner.exe'))" >> "$GITHUB_ENV"; fi
       - name: Test Windows containment helper
         if: runner.os == 'Windows'
         run: node scripts/packaging-windows-smoke.cjs
@@ -91,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           $env:SOAK_SECONDS = '30'
-          $env:JOB_RUNNER_PATH = (Resolve-Path staging/tools/StreamSnipe.JobRunner.exe).Path
+          $env:JOB_RUNNER_PATH = (Resolve-Path staging/tools/FanSnipe.JobRunner.exe).Path
           $env:FFMPEG_PATH = (Resolve-Path staging/tools/ffmpeg.exe).Path
           $env:FFPROBE_PATH = (Resolve-Path staging/tools/ffprobe.exe).Path
           node integration/soak.mjs
@@ -116,12 +116,12 @@ jobs:
             echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
             echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
             echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
-            echo "STREAMSNIPE_STABLE=1" >> "$GITHUB_ENV"
+            echo "FANSNIPE_STABLE=1" >> "$GITHUB_ENV"
             echo "CSC_LINK=$MAC_CERT" >> "$GITHUB_ENV"
             echo "CSC_KEY_PASSWORD=$MAC_CERT_PASSWORD" >> "$GITHUB_ENV"
           else
             test -n "$WIN_CERT" && test -n "$WIN_CERT_PASSWORD"
-            echo "STREAMSNIPE_STABLE=1" >> "$GITHUB_ENV"
+            echo "FANSNIPE_STABLE=1" >> "$GITHUB_ENV"
             echo "WIN_CSC_LINK=$WIN_CERT" >> "$GITHUB_ENV"
             echo "WIN_CSC_KEY_PASSWORD=$WIN_CERT_PASSWORD" >> "$GITHUB_ENV"
           fi
@@ -132,13 +132,13 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          isolated="$RUNNER_TEMP/streamsnipe-clean"
+          isolated="$RUNNER_TEMP/fansnipe-clean"
           mkdir -p "$isolated/data"
-          ditto "artifacts/mac${{ matrix.target == 'darwin-arm64' && '-arm64' || '' }}/StreamSnipe.app" "$isolated/StreamSnipe.app"
-          resources="$isolated/StreamSnipe.app/Contents/Resources"
+          ditto "artifacts/mac${{ matrix.target == 'darwin-arm64' && '-arm64' || '' }}/FanSnipe.app" "$isolated/FanSnipe.app"
+          resources="$isolated/FanSnipe.app/Contents/Resources"
           env -u NODE_PATH ELECTRON_RUN_AS_NODE=1 SOAK_DISTRIBUTION=packaged SOAK_SECONDS=30 SOAK_DIRECTORY="$isolated/data" \
             ENGINE_MODULE_PATH="$resources/engine/dist/app.js" FFMPEG_PATH="$resources/tools/ffmpeg" FFPROBE_PATH="$resources/tools/ffprobe" \
-            "$isolated/StreamSnipe.app/Contents/MacOS/StreamSnipe" "$PWD/integration/soak.mjs"
+            "$isolated/FanSnipe.app/Contents/MacOS/FanSnipe" "$PWD/integration/soak.mjs"
       - name: Build and smoke-test Windows QA bundle
         if: runner.os == 'Windows'
         shell: pwsh
@@ -149,27 +149,27 @@ jobs:
           Copy-Item 'integration/soak.mjs' (Join-Path $qa 'soak.mjs')
           Copy-Item 'desktop/qa/Run-Windows-Soak.ps1' $qa
           Copy-Item 'desktop/qa/README.txt' $qa
-          $isolated = Join-Path $env:RUNNER_TEMP 'streamsnipe-clean-qa'
+          $isolated = Join-Path $env:RUNNER_TEMP 'fansnipe-clean-qa'
           Copy-Item -Recurse $qa $isolated
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $isolated 'Run-Windows-Soak.ps1') -Smoke -OutputRoot (Join-Path $env:RUNNER_TEMP 'streamsnipe-qa-smoke')
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $isolated 'Run-Windows-Soak.ps1') -Smoke -OutputRoot (Join-Path $env:RUNNER_TEMP 'fansnipe-qa-smoke')
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell QA smoke failed with exit code $LASTEXITCODE" }
-          Compress-Archive -Path (Join-Path $qa '*') -DestinationPath 'artifacts/StreamSnipe-Windows-QA.zip'
-          $hash = (Get-FileHash -Algorithm SHA256 'artifacts/StreamSnipe-Windows-QA.zip').Hash.ToLowerInvariant()
-          "$hash  StreamSnipe-Windows-QA.zip" | Set-Content -Encoding ascii 'artifacts/StreamSnipe-Windows-QA.zip.sha256'
+          Compress-Archive -Path (Join-Path $qa '*') -DestinationPath 'artifacts/FanSnipe-Windows-QA.zip'
+          $hash = (Get-FileHash -Algorithm SHA256 'artifacts/FanSnipe-Windows-QA.zip').Hash.ToLowerInvariant()
+          "$hash  FanSnipe-Windows-QA.zip" | Set-Content -Encoding ascii 'artifacts/FanSnipe-Windows-QA.zip.sha256'
       - name: Upload Windows QA build artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: windows-qa-${{ github.sha }}
           path: |
-            artifacts/StreamSnipe-Windows-QA.zip
-            artifacts/StreamSnipe-Windows-QA.zip.sha256
+            artifacts/FanSnipe-Windows-QA.zip
+            artifacts/FanSnipe-Windows-QA.zip.sha256
           if-no-files-found: error
       - name: Verify macOS signature and notarization
         if: ${{ runner.os == 'macOS' && github.event_name != 'workflow_dispatch' && !contains(github.ref_name, '-beta') }}
         shell: bash
         run: |
-          app="artifacts/mac${{ matrix.target == 'darwin-arm64' && '-arm64' || '' }}/StreamSnipe.app"
+          app="artifacts/mac${{ matrix.target == 'darwin-arm64' && '-arm64' || '' }}/FanSnipe.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
@@ -188,7 +188,7 @@ jobs:
           cp build/ffmpeg/${{ matrix.target }}/LICENSE.LGPLv2.1 artifacts/ffmpeg-license-${{ matrix.target }}.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: streamsnipe-${{ matrix.target }}
+          name: fansnipe-${{ matrix.target }}
           path: |
             artifacts/*.dmg
             artifacts/*-mac.zip
@@ -216,12 +216,12 @@ jobs:
           python3 scripts/packaging-dashboard-extract.py dashboard.tar.gz staging/dashboard scripts/packaging-dashboard.json
       - name: Smoke test amd64 image before publishing
         run: |
-          docker buildx build --platform linux/amd64 --load -t streamsnipe:smoke .
-          docker run -d --rm --name streamsnipe-smoke -p 127.0.0.1:47821:47821 streamsnipe:smoke
-          trap 'docker stop streamsnipe-smoke || true' EXIT
+          docker buildx build --platform linux/amd64 --load -t fansnipe:smoke .
+          docker run -d --rm --name fansnipe-smoke -p 127.0.0.1:47821:47821 fansnipe:smoke
+          trap 'docker stop fansnipe-smoke || true' EXIT
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:47821/api/v1/info && break; sleep 1; done
           curl -fsS http://127.0.0.1:47821/api/v1/info | grep '"mode":"docker"'
-          docker exec streamsnipe-smoke sh -c 'test "$(id -u)" -ne 0 && test "$(stat -c %a /data/setup-token)" = 600 && /opt/streamsnipe/tools/yt-dlp --version && ! ldd /opt/streamsnipe/tools/ffmpeg | grep -q "not found" && /opt/streamsnipe/tools/ffmpeg -L 2>/dev/null | grep -q "Lesser General Public" && /opt/streamsnipe/tools/ffmpeg -protocols 2>/dev/null | grep -q https && /opt/streamsnipe/tools/deno --version'
+          docker exec fansnipe-smoke sh -c 'test "$(id -u)" -ne 0 && test "$(stat -c %a /data/setup-token)" = 600 && /opt/fansnipe/tools/yt-dlp --version && ! ldd /opt/fansnipe/tools/ffmpeg | grep -q "not found" && /opt/fansnipe/tools/ffmpeg -L 2>/dev/null | grep -q "Lesser General Public" && /opt/fansnipe/tools/ffmpeg -protocols 2>/dev/null | grep -q https && /opt/fansnipe/tools/deno --version'
       - name: Authenticate to GHCR
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -229,7 +229,7 @@ jobs:
         run: printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Build and publish multiarchitecture image with provenance
         if: startsWith(github.ref, 'refs/tags/v')
-        run: docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --push --tag "ghcr.io/fanclan/streamsnipe:${GITHUB_REF_NAME}" .
+        run: docker buildx build --platform linux/amd64,linux/arm64 --provenance=mode=max --sbom=true --push --tag "ghcr.io/fanclan/fansnipe:${GITHUB_REF_NAME}" .
 
   metadata:
     needs: [candidate, container]
@@ -237,7 +237,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: streamsnipe-*
+          pattern: fansnipe-*
           path: release-files
           merge-multiple: true
       - name: Create versioned checksums and download metadata

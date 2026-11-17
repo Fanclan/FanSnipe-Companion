@@ -13,7 +13,7 @@ const seconds = Number(process.env.SOAK_SECONDS ?? 8 * 60 * 60);
 assert.ok(Number.isFinite(seconds) && seconds >= 10, 'SOAK_SECONDS must be at least 10');
 const mode = process.env.SOAK_ENGINE_MODE ?? 'desktop';
 assert.ok(['desktop', 'docker'].includes(mode), 'SOAK_ENGINE_MODE must be desktop or docker');
-const work = process.env.SOAK_DIRECTORY ?? await mkdtemp(path.join(tmpdir(), 'streamsnipe-soak-'));
+const work = process.env.SOAK_DIRECTORY ?? await mkdtemp(path.join(tmpdir(), 'fansnipe-soak-'));
 const source = path.join(work, 'source');
 const recordingsPath = path.join(work, 'recordings');
 mkdirSync(source, { recursive: true });

@@ -1,4 +1,4 @@
-# Security policy
+# FanSnipe security policy
 
 The security boundary is the user's device. Fanclan does not receive or relay recordings. Local API access still requires authentication: loopback binding, CORS, and browser permission prompts are not substitutes for pairing.
 

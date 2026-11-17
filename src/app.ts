@@ -78,7 +78,7 @@ const qualities = ["best", "1080p", "720p", "480p", "360p"];
 const formats = ["mp4", "mkv", "ts"];
 const isForbiddenS3Host = (hostname: string) => {
   const normalized = hostname.toLowerCase().replace(/\.+$/, "");
-  return ["fanclan.io", "vercel.app", "vercel.com"].some(
+  return ["fanclan.io", "fansnipe.com", "vercel.app", "vercel.com"].some(
     (domain) => normalized === domain || normalized.endsWith("." + domain),
   );
 };
@@ -337,8 +337,8 @@ export function createEngine(options: EngineOptions) {
   app.use("/api/v1", api);
   api.get("/info", (_req, res) =>
     res.json({
-      name: "StreamSnipe",
-      version: "0.1.0",
+      name: "FanSnipe",
+      version: "0.1.1",
       protocolVersion: 1,
       mode,
     }),
@@ -1621,7 +1621,7 @@ export function createEngine(options: EngineOptions) {
         totalRecordings: all("recordings").length,
         totalChannels: all("channels").length,
         disk: disk(),
-        version: "0.1.0",
+        version: "0.1.1",
         uptime: process.uptime(),
       });
     } catch {
@@ -1630,7 +1630,7 @@ export function createEngine(options: EngineOptions) {
   });
   api.get("/diagnostics", (_req, res) =>
     res.json({
-      version: "0.1.0",
+      version: "0.1.1",
       protocolVersion: 1,
       mode,
       activeRecordings: processes.size,
@@ -1911,7 +1911,7 @@ export function createEngine(options: EngineOptions) {
       return publicSettings();
     },
     diagnostics: () => ({
-      version: "0.1.0",
+      version: "0.1.1",
       protocolVersion: 1,
       mode,
       activeRecordings: processes.size,

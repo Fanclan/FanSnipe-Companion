@@ -3,8 +3,9 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-const dataDir = process.env.DATA_DIR ?? path.join(os.homedir(), ".streamsnipe");
-const docker = process.env.STREAMSNIPE_MODE === "docker";
+import { resolveServerConfig } from "./server-config.js";
+const { dataDir, mode } = resolveServerConfig(process.env, os.homedir());
+const docker = mode === "docker";
 let setupToken = process.env.SETUP_TOKEN;
 if (docker && !setupToken) {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -23,7 +24,7 @@ const engine = createEngine({
   dashboardPath: process.env.DASHBOARD_PATH,
   host: process.env.HOST ?? "127.0.0.1",
   port: Number(process.env.PORT ?? 47821),
-  mode: process.env.STREAMSNIPE_MODE === "docker" ? "docker" : "desktop",
+  mode,
   allowedOrigins: process.env.ALLOWED_ORIGINS?.split(",").filter(Boolean),
   setupToken,
   ytDlpPath: process.env.YT_DLP_PATH,
@@ -36,7 +37,7 @@ const engine = createEngine({
 });
 engine
   .start()
-  .then((a) => console.log(`StreamSnipe listening on ${a.address}:${a.port}`))
+  .then((a) => console.log(`FanSnipe listening on ${a.address}:${a.port}`))
   .catch((e) => {
     console.error(e);
     process.exitCode = 1;

@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "StreamSnipe local companion API",
-    "version": "1.0.1",
+    "title": "FanSnipe local companion API",
+    "version": "1.0.2",
     "description": "By the team at Fanclan.io. Local-only recording and control API. Pairing and media-ticket details in README.md."
   },
   "servers": [
