@@ -16,7 +16,7 @@ if (!lock.files.some(f => f.destination === 'archive/deno')) throw new Error('St
 const executable = lock.target?.startsWith('win32-') ? '.exe' : '';
 for (const name of required) if (!lock.files.some(f => f.destination === `tools/${name}${executable}`)) throw new Error(`Missing ${name}`);
 if (!lock.files.some(f => f.destination.startsWith('licenses/'))) throw new Error('License attribution required');
-if (executable && !lock.files.some(f => f.destination === 'tools/StreamSnipe.JobRunner.exe')) throw new Error('Windows containment helper required');
+if (executable && !lock.files.some(f => f.destination === 'tools/FanSnipe.JobRunner.exe')) throw new Error('Windows containment helper required');
 const stage = path.join(root,'staging'); await rm(stage,{recursive:true,force:true}); await mkdir(stage,{recursive:true});
 const manifest = [];
 async function add(source, destination, expected) {

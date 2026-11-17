@@ -1,14 +1,14 @@
-# StreamSnipe Companion
-
-![StreamSnipe — Your streams. Your storage. Built by Fanclan.io.](docs/social-preview.png)
+# FanSnipe Companion
 
 **Local stream recording for macOS, Windows, and Docker — by the team at [Fanclan.io](https://fanclan.io).**
 
-StreamSnipe pairs a web dashboard with a recording engine on your own computer. Follow channels, record live streams, browse your library, and play or download recordings without uploading them to Fanclan.
+![FanSnipe — your streams, your storage. Built by Fanclan.io.](docs/social-preview.png)
 
-Maintained by [zerodayprime](https://github.com/zerodayprime) in the [Fanclan organization](https://github.com/Fanclan). The website and shared dashboard live in [StreamSnipe Portal](https://github.com/Fanclan/StreamSnipe-Portal).
+FanSnipe pairs a web dashboard with a recording engine on your own computer. Follow channels, record live streams, browse your library, and play or download recordings without uploading them to Fanclan.
 
-Visit the [website and web dashboard](https://streamsnipe-portal.vercel.app/) or read the [setup guide](https://streamsnipe-portal.vercel.app/docs/).
+Maintained by [zerodayprime](https://github.com/zerodayprime) in the [Fanclan organization](https://github.com/Fanclan). The website and shared dashboard live in [FanSnipe Portal](https://github.com/Fanclan/FanSnipe-Portal).
+
+The project website and dashboard are at [fansnipe.com](https://fansnipe.com).
 
 ## Where recordings go
 
@@ -35,7 +35,7 @@ The recording engine uses yt-dlp and FFmpeg. Individual platform compatibility c
 
 ## Downloads and setup
 
-Use [GitHub Releases](https://github.com/Fanclan/StreamSnipe-Companion/releases) for published builds and their verification reports. Only assets present in a release are available; a platform listed as a target is not a claim that an installer has been published.
+Use [GitHub Releases](https://github.com/Fanclan/FanSnipe-Companion/releases) for published builds and their verification reports. Only assets present in a release are available; a platform listed as a target is not a claim that an installer has been published.
 
 Target platforms are macOS 13+ (Apple Silicon and Intel), Windows 11 x64, and Linux Docker hosts (AMD64 and ARM64). Desktop beta releases are labeled separately from signed stable releases.
 
@@ -50,7 +50,7 @@ Closing the dashboard does not stop the companion. Recording requires the compan
 
 This repository owns the Docker image and Compose configuration; no separate Docker repository is needed. The image includes the engine, dashboard, and media tools. Use the checked-in Compose configuration and the packaging documentation for build and volume configuration.
 
-The published image namespace is `ghcr.io/fanclan/streamsnipe`. Use a versioned release tag or digest verified in the release manifest. Published ports default to host loopback. For a NAS or another computer, use that instance's own dashboard with authentication and an HTTPS reverse proxy; the hosted portal's localhost connection targets the computer running your browser.
+The planned image namespace is `ghcr.io/fanclan/fansnipe`. Use a versioned release tag or digest verified in the release manifest. Published ports default to host loopback. For a NAS or another computer, use that instance's own dashboard with authentication and an HTTPS reverse proxy; the hosted portal's localhost connection targets the computer running your browser.
 
 Recordings and application data belong in persistent user-managed volumes. Container replacement must preserve those volumes.
 
@@ -68,4 +68,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and [SECUR
 
 ## License and attribution
 
-StreamSnipe is MIT licensed; the original copyright notice is retained in [LICENSE](LICENSE). Bundled tools retain their own licenses and notices. Product development and maintenance are provided by the team at [Fanclan.io](https://fanclan.io), maintained by [zerodayprime](https://github.com/zerodayprime).
+FanSnipe is MIT licensed; the original copyright notice is retained in [LICENSE](LICENSE). Bundled tools retain their own licenses and notices. Product development and maintenance are provided by the team at [Fanclan.io](https://fanclan.io), maintained by [zerodayprime](https://github.com/zerodayprime).

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$OutputRoot = (Join-Path $env:LOCALAPPDATA 'StreamSnipe-QA'),
+  [string]$OutputRoot = (Join-Path $env:LOCALAPPDATA 'FanSnipe-QA'),
   [switch]$Smoke
 )
 $ErrorActionPreference = 'Stop'
@@ -8,12 +8,12 @@ Set-StrictMode -Version Latest
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -notmatch 'AMD64') { throw 'This bundle requires Windows x64.' }
 if (-not [IO.Path]::IsPathRooted($OutputRoot)) { throw 'OutputRoot must be an absolute path.' }
 $bundle = $PSScriptRoot
-$runtime = Join-Path $bundle 'app\StreamSnipe.exe'
+$runtime = Join-Path $bundle 'app\FanSnipe.exe'
 $resources = Join-Path $bundle 'app\resources'
 $engine = Join-Path $resources 'engine\dist\app.js'
 $ffmpeg = Join-Path $resources 'tools\ffmpeg.exe'
 $ffprobe = Join-Path $resources 'tools\ffprobe.exe'
-$helper = Join-Path $resources 'tools\StreamSnipe.JobRunner.exe'
+$helper = Join-Path $resources 'tools\FanSnipe.JobRunner.exe'
 $soak = Join-Path $bundle 'soak.mjs'
 $integrity = Join-Path $resources 'integrity.json'
 foreach ($item in @($runtime,$engine,$ffmpeg,$ffprobe,$helper,$soak,$integrity)) {
@@ -22,7 +22,7 @@ foreach ($item in @($runtime,$engine,$ffmpeg,$ffprobe,$helper,$soak,$integrity))
 # Reject altered packaged resources before running synthetic recordings.
 $manifest = Get-Content -Raw -LiteralPath $integrity | ConvertFrom-Json
 $listed = @($manifest.files | ForEach-Object { [string]$_.path })
-foreach ($required in @('dashboard/index.html','tools/yt-dlp.exe','tools/ffmpeg.exe','tools/ffprobe.exe','tools/deno.exe','tools/StreamSnipe.JobRunner.exe')) {
+foreach ($required in @('dashboard/index.html','tools/yt-dlp.exe','tools/ffmpeg.exe','tools/ffprobe.exe','tools/deno.exe','tools/FanSnipe.JobRunner.exe')) {
   if ($listed -notcontains $required) { throw "Missing integrity entry: $required" }
 }
 foreach ($item in $manifest.files) {
@@ -53,7 +53,7 @@ $report = [ordered]@{
 }
 $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $runnerReport -Encoding UTF8
 $previous = @{}; foreach ($name in @('ELECTRON_RUN_AS_NODE','ENGINE_MODULE_PATH','SOAK_DIRECTORY','SOAK_SECONDS','SOAK_DISTRIBUTION','FFMPEG_PATH','FFPROBE_PATH','JOB_RUNNER_PATH','NODE_PATH')) { $previous[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
-Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class StreamSnipePower { [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags); }'
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class FanSnipePower { [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags); }'
 $powerSet = $false
 try {
   [Environment]::SetEnvironmentVariable('NODE_PATH',$null,'Process')
@@ -65,7 +65,7 @@ try {
   [Environment]::SetEnvironmentVariable('FFMPEG_PATH',$ffmpeg,'Process')
   [Environment]::SetEnvironmentVariable('FFPROBE_PATH',$ffprobe,'Process')
   [Environment]::SetEnvironmentVariable('JOB_RUNNER_PATH',$helper,'Process')
-  if ([StreamSnipePower]::SetThreadExecutionState([uint32]2147483649) -eq 0) { throw 'Could not request system-awake state.' }
+  if ([FanSnipePower]::SetThreadExecutionState([uint32]2147483649) -eq 0) { throw 'Could not request system-awake state.' }
   $powerSet = $true
   Write-Host "Running synthetic $seconds-second test. Reports and logs: $runDir"
   $start = [DateTime]::UtcNow
@@ -86,6 +86,6 @@ try {
   $report['finishedAt']=[DateTime]::UtcNow.ToString('o')
   $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $runnerReport -Encoding UTF8
   foreach ($name in $previous.Keys) { [Environment]::SetEnvironmentVariable($name,$previous[$name],'Process') }
-  if ($powerSet) { [void][StreamSnipePower]::SetThreadExecutionState([uint32]2147483648) }
+  if ($powerSet) { [void][FanSnipePower]::SetThreadExecutionState([uint32]2147483648) }
   Write-Host "Results: $runDir"
 }

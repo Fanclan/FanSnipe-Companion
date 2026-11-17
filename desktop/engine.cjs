@@ -7,7 +7,7 @@ process.parentPort.on('message', async ({data}) => {
     if (data.type === 'start') {
       const { createEngine } = await import(pathToFileURL(path.join(data.resources, 'engine', 'dist', 'app.js')).href);
       const exe = process.platform === 'win32' ? '.exe' : '';
-      engine = createEngine({ dataDir: data.dataDir, recordingsPath: data.recordingsPath, dashboardPath: path.join(data.resources, 'dashboard'), host: '127.0.0.1', port: 47821, mode: 'desktop', allowedOrigins: config.dashboardOrigins, fixtureOrigins: data.fixtureOrigin ? [data.fixtureOrigin] : [], ytDlpPath: path.join(data.resources, 'tools', `yt-dlp${exe}`), ffmpegPath: path.join(data.resources, 'tools', `ffmpeg${exe}`), ffprobePath: path.join(data.resources, 'tools', `ffprobe${exe}`), jsRuntimePath: path.join(data.resources, 'tools', `deno${exe}`), jobRunnerPath: process.platform === 'win32' ? path.join(data.resources, 'tools', 'StreamSnipe.JobRunner.exe') : undefined });
+      engine = createEngine({ dataDir: data.dataDir, recordingsPath: data.recordingsPath, dashboardPath: path.join(data.resources, 'dashboard'), host: '127.0.0.1', port: 47821, mode: 'desktop', allowedOrigins: config.dashboardOrigins, fixtureOrigins: data.fixtureOrigin ? [data.fixtureOrigin] : [], ytDlpPath: path.join(data.resources, 'tools', `yt-dlp${exe}`), ffmpegPath: path.join(data.resources, 'tools', `ffmpeg${exe}`), ffprobePath: path.join(data.resources, 'tools', `ffprobe${exe}`), jsRuntimePath: path.join(data.resources, 'tools', `deno${exe}`), jobRunnerPath: process.platform === 'win32' ? path.join(data.resources, 'tools', 'FanSnipe.JobRunner.exe') : undefined });
       await engine.start();
       process.parentPort.postMessage({type:'ready'});
     } else if (data.type === 'pending') {

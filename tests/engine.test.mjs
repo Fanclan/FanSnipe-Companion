@@ -6,7 +6,7 @@ import path from "node:path";
 import { createEngine } from "../dist/app.js";
 
 test("pairing gates persistent settings and redacts credentials", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-test-"));
   const engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   try {
     const address = await engine.start();
@@ -76,7 +76,7 @@ test("fixture HLS is recorded, finalized and served with a scoped range ticket",
   const { spawnSync } = await import("node:child_process");
   const http = await import("node:http");
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-hls-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-hls-"));
   const source = path.join(dir, "source");
   fs.mkdirSync(source);
   const made = spawnSync("ffmpeg", [
@@ -196,7 +196,7 @@ test("fixture HLS is recorded, finalized and served with a scoped range ticket",
 test("legacy import leaves source media intact and is idempotent", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-import-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-import-"));
   const legacy = path.join(dir, "legacy.sqlite");
   const media = path.join(dir, "old.mp4");
   fs.writeFileSync(media, "legacy data");
@@ -241,7 +241,7 @@ test("legacy import leaves source media intact and is idempotent", async () => {
 
 test("unapproved setup, expired or revoked sessions and forged tickets are rejected", async () => {
   const { DatabaseSync } = await import("node:sqlite");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-security-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-security-"));
   const engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   try {
     const addr = await engine.start();
@@ -312,7 +312,7 @@ test("unapproved setup, expired or revoked sessions and forged tickets are rejec
 
 test("revoking a session terminates its authenticated event socket", async () => {
   const { default: WebSocket } = await import("ws");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-ws-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-ws-"));
   const engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   try {
     const a = await engine.start(),
@@ -353,7 +353,7 @@ test("revoking a session terminates its authenticated event socket", async () =>
 test("restart preserves partial capture and active jobs cannot be deleted", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-recovery-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-recovery-"));
   let engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   await engine.start();
   await engine.stop();
@@ -427,7 +427,7 @@ test("remux failure preserves the partial capture and reports interruption", asy
   const { spawnSync } = await import("node:child_process");
   const http = await import("node:http");
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-remux-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-remux-"));
   const source = path.join(dir, "source");
   fs.mkdirSync(source);
   const made = spawnSync("ffmpeg", [
@@ -529,7 +529,7 @@ test("remux failure preserves the partial capture and reports interruption", asy
 
 test("stop waits for capture exit and validated finalization", async () => {
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-stop-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-stop-"));
   const fake = path.join(dir, "recorder.cjs");
   fs.writeFileSync(
     fake,
@@ -608,7 +608,7 @@ test("stop waits for capture exit and validated finalization", async () => {
 
 test("canonical catalog lease prevents a second constructor from changing live state", async () => {
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-lease-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-lease-"));
   const catalog = path.join(dir, "catalog");
   fs.mkdirSync(catalog);
   const alias = path.join(dir, "alias");
@@ -630,7 +630,7 @@ test("canonical catalog lease prevents a second constructor from changing live s
 
 test("delayed live check never recreates a deleted channel", async () => {
   const http = await import("node:http");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-check-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-check-"));
   let release;
   const arrived = new Promise((resolve) => {
     release = resolve;
@@ -690,7 +690,7 @@ test("delayed live check never recreates a deleted channel", async () => {
 });
 
 test("S3 destination approval is session-bound and invalid settings do not mutate credentials", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-s3-approval-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-s3-approval-"));
   const engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   try {
     const a = await engine.start(),
@@ -805,7 +805,7 @@ test("S3 destination approval is session-bound and invalid settings do not mutat
 
 test("newer catalog schema is rejected without rewriting its version", async () => {
   const { DatabaseSync } = await import("node:sqlite");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-future-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-future-"));
   const file = path.join(dir, "engine.sqlite");
   let db = new DatabaseSync(file);
   db.exec("PRAGMA user_version=42");
@@ -823,7 +823,7 @@ test("newer catalog schema is rejected without rewriting its version", async () 
 test("finalization crash prefers preserved capture over an unvalidated output", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-finalizing-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-finalizing-"));
   let engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   await engine.stop();
   const root = fs.realpathSync(dir),
@@ -903,7 +903,7 @@ test("finalization crash prefers preserved capture over an unvalidated output", 
 
 test("automatic retention preserves unmanaged imported metadata", async () => {
   const { DatabaseSync } = await import("node:sqlite");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-retention-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-retention-"));
   let engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   await engine.stop();
   const db = new DatabaseSync(path.join(dir, "engine.sqlite"));
@@ -936,7 +936,7 @@ test("automatic retention preserves unmanaged imported metadata", async () => {
 
 test("catalog lease excludes a separate process", async () => {
   const { spawn } = await import("node:child_process");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-lease-process-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-lease-process-"));
   const engine = createEngine({ dataDir: dir, port: 0, monitor: false });
   try {
     const moduleUrl = new URL("../dist/app.js", import.meta.url).href;
@@ -957,7 +957,7 @@ test("catalog lease excludes a separate process", async () => {
 test("engine crash terminates recorder descendants", async () => {
   const { spawn } = await import("node:child_process");
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-crash-tree-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-crash-tree-"));
   const pidFile = path.join(dir, "child.pid"),
     childFile = path.join(dir, "child.cjs"),
     recorder = path.join(dir, "recorder.cjs");
@@ -1009,7 +1009,7 @@ test("engine crash terminates recorder descendants", async () => {
 });
 
 test("Docker setup token approves only the initiating session destination", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-docker-s3-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-docker-s3-"));
   const engine = createEngine({
     dataDir: dir,
     port: 0,
@@ -1103,7 +1103,7 @@ test(
   async () => {
     const { spawn } = await import("node:child_process");
     const fs = await import("node:fs");
-    const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-jobrunner-"));
+    const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-jobrunner-"));
     const pidFile = path.join(dir, "descendant.pid");
     const childFile = path.join(dir, "child.cjs"),
       parentFile = path.join(dir, "parent.cjs");
@@ -1165,7 +1165,7 @@ test(
 test("immediate restart waits for crashed engine recorder tree", async () => {
   const { spawn } = await import("node:child_process");
   const fs = await import("node:fs");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-restart-lease-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-restart-lease-"));
   const data = path.join(dir, "data"),
     pidFile = path.join(dir, "writer.pid"),
     recorder = path.join(dir, "recorder.cjs");
@@ -1239,7 +1239,7 @@ test("immediate restart waits for crashed engine recorder tree", async () => {
 test("trailing-dot first-party S3 destinations are denied without touching source media", async () => {
   const fs = await import("node:fs");
   const { DatabaseSync } = await import("node:sqlite");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-s3-root-dot-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-s3-root-dot-"));
   const root = fs.realpathSync(dir),
     media = path.join(root, "source.mp4");
   fs.writeFileSync(media, "original source");
@@ -1271,6 +1271,9 @@ test("trailing-dot first-party S3 destinations are denied without touching sourc
     for (const endpoint of [
       "https://streamsnipe-portal.vercel.app.",
       "https://fanclan.io.",
+      "https://fansnipe.com.",
+      "https://www.fansnipe.com.",
+      "https://media.fansnipe.com.",
       "https://files.fanclan.io.",
       "https://vercel.com.",
     ]) {
@@ -1326,7 +1329,7 @@ test("trailing-dot first-party S3 destinations are denied without touching sourc
 test("upload rejects persisted trailing-dot endpoints before opening media", async () => {
   const fs = await import("node:fs");
   const { DatabaseSync } = await import("node:sqlite");
-  const dir = await mkdtemp(path.join(tmpdir(), "streamsnipe-persisted-host-")),
+  const dir = await mkdtemp(path.join(tmpdir(), "fansnipe-persisted-host-")),
     data = path.join(dir, "data"),
     source = path.join(dir, "source.mp4");
   fs.writeFileSync(source, "unchanged");
@@ -1338,7 +1341,7 @@ test("upload rejects persisted trailing-dot endpoints before opening media", asy
       s3Enabled: true,
       s3Bucket: "user-owned",
       s3Region: "us-east-1",
-      s3Endpoint: "https://streamsnipe-portal.vercel.app.",
+      s3Endpoint: "https://www.fansnipe.com.",
     }),
   );
   db.prepare("INSERT INTO recordings VALUES (?,?)").run(

@@ -18,8 +18,8 @@ RUN npm run build && npm prune --omit=dev && \
 
 FROM node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgnutls30 && rm -rf /var/lib/apt/lists/*
-ENV STREAMSNIPE_MODE=docker NODE_ENV=production PORT=47821 HOST=0.0.0.0 DASHBOARD_PATH=/opt/streamsnipe/dashboard DATA_DIR=/data RECORDINGS_PATH=/media
-WORKDIR /opt/streamsnipe
+ENV FANSNIPE_MODE=docker NODE_ENV=production PORT=47821 HOST=0.0.0.0 DASHBOARD_PATH=/opt/fansnipe/dashboard DATA_DIR=/data RECORDINGS_PATH=/media
+WORKDIR /opt/fansnipe
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/package.json ./package.json
@@ -28,7 +28,7 @@ COPY --from=build --chown=node:node /app/staging/dashboard ./dashboard
 COPY --from=build --chown=node:node /app/staging/tools ./tools
 COPY --from=build --chown=node:node /app/staging/licenses ./licenses
 COPY --from=build --chown=node:node /app/staging/integrity.json ./integrity.json
-ENV JS_RUNTIME_PATH=/opt/streamsnipe/tools/deno YT_DLP_PATH=/opt/streamsnipe/tools/yt-dlp FFMPEG_PATH=/opt/streamsnipe/tools/ffmpeg FFPROBE_PATH=/opt/streamsnipe/tools/ffprobe
+ENV JS_RUNTIME_PATH=/opt/fansnipe/tools/deno YT_DLP_PATH=/opt/fansnipe/tools/yt-dlp FFMPEG_PATH=/opt/fansnipe/tools/ffmpeg FFPROBE_PATH=/opt/fansnipe/tools/ffprobe
 RUN mkdir -p /data /media && chown node:node /data /media
 USER node
 VOLUME ["/data", "/media"]

@@ -15,7 +15,7 @@ test('resource verification detects a modified bundled tool', () => {
   const { verifyResources } = require('../security.cjs'); const dir = fs.mkdtempSync(path.join(os.tmpdir(),'streamsnipe-test-'));
   try {
     const suffix = process.platform === 'win32' ? '.exe' : '';
-    const names = ['dashboard/index.html', ...['yt-dlp','ffmpeg','ffprobe','deno'].map(n => `tools/${n}${suffix}`), ...(process.platform === 'win32' ? ['tools/StreamSnipe.JobRunner.exe'] : [])];
+    const names = ['dashboard/index.html', ...['yt-dlp','ffmpeg','ffprobe','deno'].map(n => `tools/${n}${suffix}`), ...(process.platform === 'win32' ? ['tools/FanSnipe.JobRunner.exe'] : [])];
     const files = names.map(name => { const full = path.join(dir,name); fs.mkdirSync(path.dirname(full),{recursive:true}); fs.writeFileSync(full,'trusted'); return {path:name,sha256:crypto.createHash('sha256').update('trusted').digest('hex')}; });
     fs.writeFileSync(path.join(dir,'integrity.json'),JSON.stringify({files})); verifyResources(dir);
     fs.writeFileSync(path.join(dir,names[1]),'modified'); assert.throws(() => verifyResources(dir), /integrity failure/);
@@ -29,4 +29,9 @@ test('test fixture seam accepts only explicit loopback origin and absolute data 
   assert.throws(()=>parseTestEnvironment({STREAMSNIPE_TEST_FIXTURE_ORIGIN:'http://127.0.0.1:1234',STREAMSNIPE_TEST_DATA_DIR:'relative'}));
   assert.throws(()=>parseTestEnvironment({STREAMSNIPE_TEST_FIXTURE_ORIGIN:'http://127.0.0.1:1234'}));
   assert.deepEqual(parseTestEnvironment({STREAMSNIPE_TEST_FIXTURE_ORIGIN:'http://127.0.0.1:1234',STREAMSNIPE_TEST_DATA_DIR:path.resolve('tmp')}),{origin:'http://127.0.0.1:1234',dataDir:path.resolve('tmp')});
+});
+test('FanSnipe isolated test variables take precedence and legacy variables still work',()=>{
+  const {parseTestEnvironment}=require('../security.cjs');const path=require('node:path');const old=path.resolve('legacy-test'),current=path.resolve('current-test');
+  assert.deepEqual(parseTestEnvironment({FANSNIPE_TEST_FIXTURE_ORIGIN:'http://127.0.0.1:1234',FANSNIPE_TEST_DATA_DIR:current,STREAMSNIPE_TEST_FIXTURE_ORIGIN:'http://127.0.0.1:2345',STREAMSNIPE_TEST_DATA_DIR:old}),{origin:'http://127.0.0.1:1234',dataDir:current});
+  assert.deepEqual(parseTestEnvironment({STREAMSNIPE_TEST_FIXTURE_ORIGIN:'http://127.0.0.1:2345',STREAMSNIPE_TEST_DATA_DIR:old}),{origin:'http://127.0.0.1:2345',dataDir:old});
 });

@@ -1,8 +1,12 @@
 {
   "dashboardOrigins": [
+    "https://fansnipe.com",
+    "https://fansnipe-portal.vercel.app",
     "https://streamsnipe-portal.vercel.app"
   ],
   "externalOrigins": [
+    "https://fansnipe.com",
+    "https://www.fansnipe.com",
     "https://github.com",
     "https://fanclan.io",
     "https://www.twitch.tv",

@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createEngine } from '../dist/app.js';
 
 // A real AWS SDK transfer to a disposable S3-compatible sink. No real credentials or media.
-const work = await mkdtemp(path.join(tmpdir(), 'streamsnipe-direct-upload-'));
+const work = await mkdtemp(path.join(tmpdir(), 'fansnipe-direct-upload-'));
 const mediaRoot = path.join(work, 'original-media');
 await mkdir(mediaRoot);
 const media = path.join(mediaRoot, 'fixture.mp4');
@@ -83,7 +83,8 @@ try {
   assert.equal(settings.hasS3Credentials, true);
   assert.ok(!JSON.stringify(settings).includes(key));
   assert.ok(!JSON.stringify(settings).includes(secret));
-  for (const forbidden of ['https://fanclan.io', 'https://streamsnipe-portal.vercel.app', 'https://vercel.com']) {
+  const forbiddenDestinations = ['https://fanclan.io', 'https://fansnipe.com', 'https://media.fansnipe.com.', 'https://streamsnipe-portal.vercel.app', 'https://vercel.com'];
+  for (const forbidden of forbiddenDestinations) {
     await request('/settings', 'PUT', { s3Endpoint: forbidden }, 422);
   }
   const upload = await request(`/recordings/${record.id}/upload`, 'POST', {});
@@ -112,7 +113,7 @@ try {
   report.mediaSha256 = sha256(original);
   report.localDownloadMatched = true;
   report.legacySourceUnchanged = true;
-  report.forbiddenDestinationsRejected = 3;
+  report.forbiddenDestinationsRejected = forbiddenDestinations.length;
   console.log(JSON.stringify({ ...report, reportPath: path.join(work, 'report.json') }));
 } catch (error) {
   report.status = 'failed'; report.error = String(error.stack || error); process.exitCode = 1;

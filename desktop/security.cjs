@@ -17,14 +17,14 @@ function verifyResources(root) {
   validateManifest(manifest);
   const entries = new Map(manifest.files.map(f => [f.path, f.sha256]));
   for (const required of ['dashboard/index.html', `tools/yt-dlp${process.platform === 'win32' ? '.exe' : ''}`, `tools/ffmpeg${process.platform === 'win32' ? '.exe' : ''}`, `tools/ffprobe${process.platform === 'win32' ? '.exe' : ''}`, `tools/deno${process.platform === 'win32' ? '.exe' : ''}`]) if (!entries.has(required)) throw new Error(`Missing required resource: ${required}`);
-  if (process.platform === 'win32' && !entries.has('tools/StreamSnipe.JobRunner.exe')) throw new Error('Missing Windows containment helper');
+  if (process.platform === 'win32' && !entries.has('tools/FanSnipe.JobRunner.exe')) throw new Error('Missing Windows containment helper');
   for (const [rel, expected] of entries) {
     const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, rel))).digest('hex');
     if (actual !== expected) throw new Error(`Resource integrity failure: ${rel}`);
   }
 }
 function parseTestEnvironment(env) {
-  const origin=env.STREAMSNIPE_TEST_FIXTURE_ORIGIN, dataDir=env.STREAMSNIPE_TEST_DATA_DIR;
+  const origin=env.FANSNIPE_TEST_FIXTURE_ORIGIN || env.STREAMSNIPE_TEST_FIXTURE_ORIGIN, dataDir=env.FANSNIPE_TEST_DATA_DIR || env.STREAMSNIPE_TEST_DATA_DIR;
   if (!origin && !dataDir) return null;
   if (!origin || !dataDir || !path.isAbsolute(dataDir) || !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}$/.test(origin)) throw new Error('Invalid isolated test environment');
   const parsed = new URL(origin);
