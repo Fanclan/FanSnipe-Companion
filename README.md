@@ -35,9 +35,9 @@ The recording engine uses yt-dlp and FFmpeg. It accepts Twitch, YouTube, Kick an
 
 ## Downloads and setup
 
-Use [GitHub Releases](https://github.com/Fanclan/FanSnipe-Companion/releases) for published builds and their verification reports. Only assets present in a release are available; a platform listed as a target is not a claim that an installer has been published.
+Get the macOS 13+ installer for Apple Silicon or Intel, or the Windows 11 x64 installer, from the [FanSnipe desktop 0.1.3 beta release](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/desktop-v0.1.3-beta.1). These desktop builds are unsigned, and the macOS builds are unnotarized. The eight-hour Windows 11 recording test is deferred.
 
-Target platforms are macOS 13+ (Apple Silicon and Intel), Windows 11 x64, and Linux Docker hosts (AMD64 and ARM64). The first desktop beta is unsigned: macOS builds are not notarized, and the Windows build is not signed. The Windows eight-hour soak is deferred; see the [beta release and verification](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/v0.1.1-beta.1) for completed checks.
+Docker is available for Linux AMD64 and ARM64. [Docker 0.1.3 beta release and checksums](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/docker-v0.1.3-beta.1)
 
 1. Install the companion and select a recording folder.
 2. Open the dashboard from the companion, or use the hosted portal in Chrome or Edge.
@@ -52,7 +52,17 @@ Upgrading from StreamSnipe: quit the old companion before starting FanSnipe. If 
 
 This repository owns the Docker image and Compose configuration; no separate Docker repository is needed. The image includes the engine, dashboard, and media tools. Use the checked-in Compose configuration and the packaging documentation for build and volume configuration.
 
-The Docker-only beta image is `ghcr.io/fanclan/fansnipe:docker-v0.1.2-beta.1`, with multiarchitecture index digest `sha256:3bcd0c443a04ec8e003eaae34fda9e93d74b083a5f5f6e537810b113fe907e6c`. See the [Docker beta release and verification](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/docker-v0.1.2-beta.1) for its image digest and checks. Published ports default to host loopback. For a NAS or another computer, use that instance's own dashboard with authentication and an HTTPS reverse proxy; the hosted portal's localhost connection targets the computer running your browser.
+From a checkout containing [compose.yaml](compose.yaml), select the published release and start the service.
+
+```sh
+export FANSNIPE_VERSION=docker-v0.1.3-beta.1
+docker compose pull fansnipe
+docker compose up -d fansnipe
+```
+
+The image is `ghcr.io/fanclan/fansnipe:docker-v0.1.3-beta.1`. Its verified multiarchitecture index digest is `sha256:9f6828664fac253437152256c656419920a09da7beb55fee59c190d1f2fef9ec`. [Image manifest and checksums](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/docker-v0.1.3-beta.1)
+
+Open the bundled dashboard at [127.0.0.1:47821/app/](http://127.0.0.1:47821/app/). Compose binds to loopback by default. For a NAS or another computer, use that instance's dashboard with authentication and an HTTPS reverse proxy.
 
 Recordings and application data belong in persistent user-managed volumes. When upgrading an existing StreamSnipe Compose installation, stop active recordings and the old `streamsnipe` service with its original project name, retain both volumes, and start FanSnipe with the same project name. See the [Compose upgrade details](desktop/PACKAGING.md) before changing project names or directories.
 
