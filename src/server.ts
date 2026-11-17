@@ -4,7 +4,10 @@ import os from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { resolveServerConfig } from "./server-config.js";
-const { dataDir, mode } = resolveServerConfig(process.env, os.homedir());
+const { dataDir, mode, hostedDashboard } = resolveServerConfig(
+  process.env,
+  os.homedir(),
+);
 const docker = mode === "docker";
 let setupToken = process.env.SETUP_TOKEN;
 if (docker && !setupToken) {
@@ -25,6 +28,7 @@ const engine = createEngine({
   host: process.env.HOST ?? "127.0.0.1",
   port: Number(process.env.PORT ?? 47821),
   mode,
+  hostedDashboard,
   allowedOrigins: process.env.ALLOWED_ORIGINS?.split(",").filter(Boolean),
   setupToken,
   ytDlpPath: process.env.YT_DLP_PATH,

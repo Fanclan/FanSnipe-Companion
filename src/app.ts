@@ -50,6 +50,7 @@ export interface EngineOptions {
   jsRuntimePath?: string;
   jobRunnerPath?: string;
   publicOrigin?: string;
+  hostedDashboard?: boolean;
   lockedFields?: string[];
   mode?: "desktop" | "docker";
   allowedOrigins?: string[];
@@ -125,6 +126,8 @@ export function createEngine(options: EngineOptions) {
     mode = options.mode ?? "desktop";
   if (mode === "desktop" && !["127.0.0.1", "::1", "localhost"].includes(host))
     throw new Error("Desktop must bind loopback");
+  if (options.hostedDashboard && options.publicOrigin)
+    throw new Error("Hosted dashboard cannot be combined with PUBLIC_ORIGIN");
   mkdirSync(options.dataDir, { recursive: true, mode: 0o700 });
   try {
     chmodSync(options.dataDir, 0o700);
@@ -286,20 +289,38 @@ export function createEngine(options: EngineOptions) {
     options.publicOrigin !== publicOrigin
   )
     throw Error("PUBLIC_ORIGIN must be an exact origin");
+  const hostedOrigin = "https://fansnipe.com";
+  const loopbackHost = (value: string) =>
+    /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(value);
   const safeOrigin = (origin: string | undefined, requestHost?: string) =>
     !origin ||
     (mode === "docker"
-      ? publicOrigin
-        ? origin === publicOrigin
-        : !!requestHost && origin === `http://${requestHost}`
+      ? (options.hostedDashboard === true &&
+          origin === hostedOrigin &&
+          !!requestHost &&
+          loopbackHost(requestHost)) ||
+        (publicOrigin
+          ? origin === publicOrigin
+          : !!requestHost && origin === `http://${requestHost}`)
       : (options.allowedOrigins ?? []).includes(origin) ||
         (!!requestHost &&
           origin === `http://${requestHost}` &&
-          /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(requestHost)));
+          loopbackHost(requestHost)));
   const validHost = (requestHost: string) =>
     mode !== "docker" ||
-    !publicOrigin ||
-    requestHost === new URL(publicOrigin).host;
+    (options.hostedDashboard === true
+      ? loopbackHost(requestHost)
+      : !publicOrigin || requestHost === new URL(publicOrigin).host);
+  // Setup credentials are accepted only from the bundled same-origin operator
+  // page or a non-browser CLI, never from the hosted dashboard.
+  const localOperator = (req: Request) => {
+    const origin = req.headers.origin;
+    if (origin === hostedOrigin) return false;
+    if (!origin) return true;
+    return publicOrigin
+      ? origin === publicOrigin
+      : origin === `http://${req.headers.host}`;
+  };
   app.use((req, res, next) => {
     const h = req.headers.host ?? "";
     const hostname = h.startsWith("[")
@@ -335,10 +356,14 @@ export function createEngine(options: EngineOptions) {
   );
   const api = express.Router();
   app.use("/api/v1", api);
+  api.use("/pairings", (_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  });
   api.get("/info", (_req, res) =>
     res.json({
       name: "FanSnipe",
-      version: "0.1.1",
+      version: "0.1.2",
       protocolVersion: 1,
       mode,
     }),
@@ -369,6 +394,7 @@ export function createEngine(options: EngineOptions) {
     clients.set(id, {
       id,
       name: req.body.name.trim(),
+      origin: req.headers.origin ?? null,
       pollHash: hash(pollToken),
       code,
       expiresAt,
@@ -382,11 +408,12 @@ export function createEngine(options: EngineOptions) {
         .filter(
           (p) => p.status === "pending" && Date.parse(p.expiresAt) > Date.now(),
         )
-        .map(({ id, name, code, expiresAt }) => ({
+        .map(({ id, name, code, expiresAt, origin }) => ({
           id,
           name,
           code,
           expiresAt,
+          origin,
         })),
     approve: (id: string) => {
       const p = clients.get(id);
@@ -428,10 +455,30 @@ export function createEngine(options: EngineOptions) {
     }
     return res.json(response);
   });
+  api.get("/pairings/:id/pending", (req, res) => {
+    if (
+      mode !== "docker" ||
+      !options.setupToken ||
+      !localOperator(req) ||
+      !equal(String(req.headers["x-setup-token"] ?? ""), options.setupToken)
+    )
+      return err(res, 403, "Setup denied");
+    const p = clients.get(req.params.id);
+    if (!p || p.status !== "pending" || Date.parse(p.expiresAt) <= Date.now())
+      return err(res, 404, "Pairing not found");
+    return res.json({
+      id: p.id,
+      name: p.name,
+      code: p.code,
+      expiresAt: p.expiresAt,
+      origin: p.origin,
+    });
+  });
   api.post("/pairings/:id/approve", (req, res) => {
     if (
       mode !== "docker" ||
       !options.setupToken ||
+      !localOperator(req) ||
       !equal(String(req.headers["x-setup-token"] ?? ""), options.setupToken)
     )
       return err(res, 403, "Setup denied");
@@ -1038,6 +1085,7 @@ export function createEngine(options: EngineOptions) {
     if (
       mode !== "docker" ||
       !options.setupToken ||
+      !localOperator(req) ||
       !equal(String(req.headers["x-setup-token"] ?? ""), options.setupToken)
     )
       return err(res, 403, "Setup denied");
@@ -1621,7 +1669,7 @@ export function createEngine(options: EngineOptions) {
         totalRecordings: all("recordings").length,
         totalChannels: all("channels").length,
         disk: disk(),
-        version: "0.1.1",
+        version: "0.1.2",
         uptime: process.uptime(),
       });
     } catch {
@@ -1630,7 +1678,7 @@ export function createEngine(options: EngineOptions) {
   });
   api.get("/diagnostics", (_req, res) =>
     res.json({
-      version: "0.1.1",
+      version: "0.1.2",
       protocolVersion: 1,
       mode,
       activeRecordings: processes.size,
@@ -1682,6 +1730,11 @@ export function createEngine(options: EngineOptions) {
     });
   });
   if (options.dashboardPath && existsSync(options.dashboardPath)) {
+    app.use("/app", (_req, res, next) => {
+      res.setHeader("X-Frame-Options", "DENY");
+      res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+      next();
+    });
     app.use("/app", express.static(options.dashboardPath));
     app.get("/app/{*splat}", (_req, res) =>
       res.sendFile(path.resolve(options.dashboardPath!, "index.html")),
@@ -1911,7 +1964,7 @@ export function createEngine(options: EngineOptions) {
       return publicSettings();
     },
     diagnostics: () => ({
-      version: "0.1.1",
+      version: "0.1.2",
       protocolVersion: 1,
       mode,
       activeRecordings: processes.size,
