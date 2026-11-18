@@ -1,5 +1,7 @@
 import type { Readable } from "node:stream";
 
+export const deniedSourceError =
+  "The site denied access. Use a public stream available on this device.";
 const offline = "This channel is offline. Try again when it is live.";
 export const unknownSourceError =
   "The recorder could not read this stream. Check the public stream URL and try again.";
@@ -17,7 +19,7 @@ function describe(line: string): string | undefined {
       line,
     )
   )
-    return "The site denied access. Use a public stream available on this device.";
+    return deniedSourceError;
   if (/HTTP Error 429\b|429 Too Many Requests/i.test(line))
     return "The site is limiting requests. Wait before trying again.";
   if (

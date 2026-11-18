@@ -42,7 +42,7 @@ try {
       "error",
       ...inputs,
       "-t",
-      "32",
+      "80",
       "-c:v",
       "mpeg2video",
       "-g",
@@ -127,6 +127,40 @@ try {
   ({ token } = await request("GET", `/pairings/${pair.id}`, undefined, {
     "X-Pairing-Token": pair.pollToken,
   }));
+  async function checkLivePreview(input) {
+    const viewer = await request("POST", "/previews", input);
+    const manifestUrl = new URL(viewer.url, base);
+    assert.equal(manifestUrl.origin, new URL(base).origin);
+    const playlist = await fetch(manifestUrl);
+    assert.equal(playlist.status, 200, "Live preview playlist is playable");
+    const segments = (await playlist.text())
+      .split(/\r?\n/)
+      .filter((line) => line && !line.startsWith("#"));
+    assert.ok(
+      segments.length > 0 &&
+        segments.every((name) => /^seg\d+\.ts$/.test(name)),
+    );
+    const segment = await fetch(new URL(segments.at(-1), manifestUrl));
+    assert.equal(segment.status, 200);
+    const fragment = path.join(directory, "preview-check.ts");
+    await writeFile(fragment, new Uint8Array(await segment.arrayBuffer()));
+    const probe = JSON.parse(
+      run(ffprobe, [
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "json",
+        fragment,
+      ]),
+    );
+    assert.deepEqual(probe.streams.map((s) => s.codec_type).sort(), [
+      "audio",
+      "video",
+    ]);
+    return manifestUrl;
+  }
   for (const [scenario, separate, stop, container] of [
     ["combined", false, false, "mp4"],
     ["split", true, false, "ts"],
@@ -154,11 +188,19 @@ try {
       }),
     );
     // --load-info-json makes yt-dlp ignore the example page URL and read only loopback requests.
+    const preview = stop
+      ? await checkLivePreview({ url: "https://www.twitch.tv/fixture" })
+      : undefined;
     const rec = await request("POST", "/recordings/start", {
       url: "https://www.twitch.tv/fixture",
       format: container,
       quality: "720p",
     });
+    if (preview) {
+      assert.equal((await fetch(preview)).status, 403);
+      await checkLivePreview({ recordingId: rec.id });
+      console.log("split live audio/video previewed before and during capture");
+    }
     const file = path.join(recordingsPath, `${rec.id}.${container}`);
     let row;
     for (let i = 0; i < 300; i++) {

@@ -50,7 +50,7 @@ Upgrading from StreamSnipe: quit the old companion before starting FanSnipe. If 
 
 ## Docker
 
-This repository owns the Docker image and Compose configuration; no separate Docker repository is needed. The image includes the engine, dashboard, and media tools. Use the checked-in Compose configuration and the packaging documentation for build and volume configuration.
+The Docker image includes the recording engine, local studio, and media tools. Keep its data and recording volumes when upgrading.
 
 From a checkout containing [compose.yaml](compose.yaml), select the published release and start the service.
 
@@ -68,11 +68,44 @@ Recordings and application data belong in persistent user-managed volumes. When 
 
 Starting with Docker 0.1.2, you can also connect [fansnipe.com/app](https://fansnipe.com/app/) to Docker on the same computer. Enable `FANSNIPE_HOSTED_DASHBOARD=true`, keep the default loopback port binding, and approve pairing in the local page opened by the website. Enter the setup token only in that local page. The bridge is off by default and cannot be combined with `FANSNIPE_PUBLIC_ORIGIN`; see the [hosted Docker setup](desktop/PACKAGING.md) for instructions. Recordings still travel directly from Docker to your browser.
 
+### Unlock the local studio with your own password
+
+Password-enabled companion releases let you unlock the bundled studio in the same browser tab. Check the downloads page for the current release. Save a private UTF-8 plain-text file called `fansnipe_studio_password` containing a passphrase of your choice (one line, 8–1024 bytes). Your password manager can remember it. A running companion detects the first valid file in a mounted setup folder when you open or refresh the studio. On native Linux hosts, grant the container user (UID 1000) read access to the mounted file and traversal of its parent folder.
+
+```mermaid
+flowchart LR
+    file["Your private password file"] --> desktop["Docker Desktop · Optional settings"]
+    file --> compose["Compose · secret file"]
+    desktop --> studio["Open in browser"]
+    compose --> studio
+    studio --> unlock["Unlock studio"]
+    unlock --> home["Paste a stream link"]
+```
+
+**Docker Desktop**
+
+1. When creating the FanSnipe container, open **Images → Run → Optional settings**. Set host port **47821** for container port **47821**. For a studio on this computer, choose the localhost port-binding default in Docker Desktop’s network settings. [Docker Desktop network settings](https://docs.docker.com/desktop/features/networking/#how-exposed-ports-work)
+2. In **Volumes**, set the host path to your private password file and the container path to `/run/secrets/fansnipe_studio_password`. Use a read-only mount where available. If your file picker selects folders only, place the file in a dedicated folder, name it exactly `fansnipe_studio_password`, and mount that folder at `/run/secrets`. Use persistent volumes for `/data` and `/media`.
+3. Start the container. In **Containers**, click its port or **Open in browser**. Enter your password on the local **Unlock studio** screen. A returning browser with a current session opens directly to the studio. [Docker Desktop container settings](https://docs.docker.com/desktop/use-desktop/images/#run-an-image-as-a-container)
+
+**Docker Compose**
+
+1. Save the private file alongside the Compose files or set `FANSNIPE_STUDIO_PASSWORD_SOURCE` to its absolute host path. The default filename is ignored by Git and by the image build.
+2. Include both configurations when starting or updating your existing Compose project. The overlay mounts the file as a Docker secret. Keep the same Compose project name to retain your catalog and media. [How Compose secrets work](https://docs.docker.com/compose/how-tos/use-secrets/)
+
+```sh
+docker compose -f compose.yaml -f compose.studio-password.yaml up -d fansnipe
+```
+
+3. Open [your local studio](http://127.0.0.1:47821/app/) and enter your password. Subsequent visits use the remembered session until it expires or you revoke it in Settings.
+
+**Change or recover a password.** Replace the private file and recreate the container with the same mounts and volumes so Docker remounts the updated file. Password-created browser sessions must unlock again. Existing operator-approved pairings and upload destination approvals keep their existing authentication. Removing the password mount and restarting disables password unlock. A shared NAS should use its own studio at its configured `https://` origin behind an HTTPS reverse proxy.
+
 ## Development and API
 
 The companion owns the `/api/v1` contract, recording engine, SQLite catalog, and desktop/Docker packaging. The portal owns the dashboard source and publishes the immutable dashboard bundle embedded by companion releases.
 
-The local API requires pairing and authentication. Media uses short-lived read tickets so large files can stream and seek without loading the entire recording into browser memory. See the protocol and architecture documentation for supported operations.
+The local API accepts a revocable session from studio unlock or pairing. Media uses short-lived read tickets so large files can stream and seek without loading the entire recording into browser memory. See the protocol and architecture documentation for supported operations.
 
 Install using the committed lockfile, run the test suite and type checks, and build before packaging. Tests use generated media and local fixtures rather than users' recordings. Packaging pins the dashboard and media tools to recorded versions and checksums.
 
