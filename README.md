@@ -35,14 +35,13 @@ The recording engine uses yt-dlp and FFmpeg. It accepts Twitch, YouTube, Kick an
 
 ## Downloads and setup
 
-Get the macOS 13+ installer for Apple Silicon or Intel, or the Windows 11 x64 installer, from the [FanSnipe desktop 0.1.3 beta release](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/desktop-v0.1.3-beta.1). These desktop builds are unsigned, and the macOS builds are unnotarized. The eight-hour Windows 11 recording test is deferred.
+Get the macOS 13+ installer for Apple Silicon or Intel, or the Windows 11 x64 installer, from the [FanSnipe desktop 0.1.4 beta release](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/desktop-v0.1.4-beta.1). These desktop builds are unsigned, and the macOS builds are unnotarized. The eight-hour Windows 11 recording test is deferred.
 
-Docker is available for Linux AMD64 and ARM64. [Docker 0.1.3 beta release and checksums](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/docker-v0.1.3-beta.1)
+Docker is available for Linux AMD64 and ARM64. [Docker 0.1.4 beta release and checksums](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/docker-v0.1.4-beta.1)
 
-1. Install the companion and select a recording folder.
-2. Open the dashboard from the companion, or use the hosted portal in Chrome or Edge.
-3. Approve browser access and pairing on your computer.
-4. Add a channel or start a recording.
+1. Open the companion on your computer. Docker users can [unlock the bundled studio with a password](#unlock-the-local-studio-with-your-own-password). Desktop users can approve a browser in the native companion.
+2. Paste a supported stream link on Studio Home to see the broadcast title and live status. Edit the suggested title if you wish.
+3. Choose **Play preview** to watch on this device, or select **Record**. Stop the capture to play the saved recording.
 
 Closing the dashboard does not stop the companion. Recording requires the companion to remain running and the computer to remain awake. Explicitly quitting the companion stops active jobs gracefully.
 
@@ -52,15 +51,15 @@ Upgrading from StreamSnipe: quit the old companion before starting FanSnipe. If 
 
 The Docker image includes the recording engine, local studio, and media tools. Keep its data and recording volumes when upgrading.
 
-From a checkout containing [compose.yaml](compose.yaml), select the published release and start the service.
+In the folder containing [compose.yaml](compose.yaml), save your chosen passphrase in a private plain-text file named `fansnipe_studio_password`. Set the version to this release and start the password-enabled studio. For other installation methods, see the [Docker Desktop and Compose setup instructions](#unlock-the-local-studio-with-your-own-password).
 
 ```sh
-export FANSNIPE_VERSION=docker-v0.1.3-beta.1
-docker compose pull fansnipe
-docker compose up -d fansnipe
+export FANSNIPE_VERSION=docker-v0.1.4-beta.1@sha256:c6b9558701654183c04e73e60380b9841d0edd82721440913b9d807a31013752
+docker compose -f compose.yaml -f compose.studio-password.yaml pull fansnipe
+docker compose -f compose.yaml -f compose.studio-password.yaml up -d fansnipe
 ```
 
-The image is `ghcr.io/fanclan/fansnipe:docker-v0.1.3-beta.1`. Its verified multiarchitecture index digest is `sha256:9f6828664fac253437152256c656419920a09da7beb55fee59c190d1f2fef9ec`. [Image manifest and checksums](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/docker-v0.1.3-beta.1)
+The published image is `ghcr.io/fanclan/fansnipe:docker-v0.1.4-beta.1`. Both native builds share OCI index digest `sha256:c6b9558701654183c04e73e60380b9841d0edd82721440913b9d807a31013752`. [Image manifest and checksums](https://github.com/Fanclan/FanSnipe-Companion/releases/tag/docker-v0.1.4-beta.1)
 
 Open the bundled dashboard at [127.0.0.1:47821/app/](http://127.0.0.1:47821/app/). Compose binds to loopback by default. For a NAS or another computer, use that instance's dashboard with authentication and an HTTPS reverse proxy.
 
@@ -70,7 +69,7 @@ Starting with Docker 0.1.2, you can also connect [fansnipe.com/app](https://fans
 
 ### Unlock the local studio with your own password
 
-Password-enabled companion releases let you unlock the bundled studio in the same browser tab. Check the downloads page for the current release. Save a private UTF-8 plain-text file called `fansnipe_studio_password` containing a passphrase of your choice (one line, 8–1024 bytes). Your password manager can remember it. A running companion detects the first valid file in a mounted setup folder when you open or refresh the studio. On native Linux hosts, grant the container user (UID 1000) read access to the mounted file and traversal of its parent folder.
+Docker 0.1.4 and later support unlocking the bundled studio in the same browser tab. Save a private UTF-8 plain-text file called `fansnipe_studio_password` containing a passphrase of your choice (one line, 8–1024 bytes). Your password manager can remember it. A running companion detects the first valid file in a mounted setup folder when you open or refresh the studio. On native Linux hosts, grant the container user (UID 1000) read access to the mounted file and traversal of its parent folder.
 
 ```mermaid
 flowchart LR
